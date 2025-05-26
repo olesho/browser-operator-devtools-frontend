@@ -99,6 +99,10 @@ const UIStrings = {
    * @description Placeholder when LiteLLM endpoint is missing
    */
   missingLiteLLMEndpoint: 'Please configure LiteLLM endpoint in Settings',
+  /**
+   *@description AI chat UI text for the test button.
+   */
+  test: 'Test',
 } as const;
 
 const str_ = i18n.i18n.registerUIStrings('panels/ai_chat/ui/AIChatPanel.ts', UIStrings);
@@ -110,6 +114,7 @@ interface ToolbarViewInput {
   onDeleteClick: () => void;
   onHelpClick: () => void;
   onSettingsClick: () => void;
+  onTestClick: () => void;
   isDeleteHistoryButtonVisible: boolean;
   isCenteredView: boolean;
 }
@@ -126,6 +131,13 @@ function toolbarView(input: ToolbarViewInput): Lit.LitTemplate {
           .jslogContext=${'ai-chat.history'}
           .variant=${Buttons.Button.Variant.TOOLBAR}
           @click=${input.onHistoryClick}></devtools-button>
+      <devtools-button
+          title=${i18nString(UIStrings.test)}
+          aria-label=${i18nString(UIStrings.test)}
+          .iconName=${'bug'}
+          .jslogContext=${'ai-chat.test'}
+          .variant=${Buttons.Button.Variant.TOOLBAR}
+          @click=${input.onTestClick}></devtools-button>
           <div class="toolbar-divider"></div>
         ${!input.isCenteredView ? html`
         <devtools-button
@@ -982,6 +994,7 @@ export class AIChatPanel extends UI.Panel.Panel {
       onDeleteClick: this.#onDeleteClick.bind(this),
       onHelpClick: this.#onHelpClick.bind(this),
       onSettingsClick: this.#onSettingsClick.bind(this),
+      onTestClick: this.#onTestClick.bind(this),
       isDeleteHistoryButtonVisible: this.#messages.length > 1,
       isCenteredView,
     }), this.#toolbarContainer, { host: this });
@@ -1057,6 +1070,15 @@ export class AIChatPanel extends UI.Panel.Panel {
 
   #onHelpClick(): void {
     HelpDialog.show();
+  }
+
+  #onTestClick(): void {
+    // Create a new chat
+    this.#onNewChatClick();
+
+    // Add and send a test message
+    const testMessage = 'This is a test message. Please respond with a test response.';
+    void this.sendMessage(testMessage);
   }
 
   /**
