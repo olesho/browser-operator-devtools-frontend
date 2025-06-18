@@ -1909,7 +1909,7 @@ Important guidelines:
               description: performActionTool.description,
               parameters: performActionTool.schema
             }],
-          },
+          }
         );
 
         // --- Parse the Tool Call Response ---
@@ -2767,7 +2767,7 @@ Extract NodeIDs according to the provided objective and schema, then return a st
           promptExtractData,
           {
             systemPrompt: this.getSystemPrompt(),
-          },
+                  }
         );
         logger.info('SchemaBasedDataExtractionTool: Response:', response);
 

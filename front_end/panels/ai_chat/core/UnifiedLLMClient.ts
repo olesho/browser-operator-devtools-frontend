@@ -6,6 +6,7 @@ import {LiteLLMClient, type LiteLLMResponse, type OpenAIMessage} from './LiteLLM
 import {OpenAIClient, type OpenAIResponse} from './OpenAIClient.js';
 import { createLogger } from './Logger.js';
 import { ChatMessageEntity, type ChatMessage } from '../ui/ChatView.js';
+import { Callback } from './Callback.js';
 
 const logger = createLogger('UnifiedLLMClient');
 
@@ -131,7 +132,8 @@ export class UnifiedLLMClient {
     apiKey: string,
     modelName: string,
     userPrompt: string,
-    options: UnifiedLLMOptions
+    options: UnifiedLLMOptions,
+    callback?: Callback,
   ): Promise<string | any> {
     // Convert simple prompt to message format
     const messages = [{
@@ -152,8 +154,8 @@ export class UnifiedLLMClient {
       };
     }
 
-    const response = await this.callLLMWithMessages(apiKey, modelName, messages, enhancedOptions);
-    
+    const response = await this.callLLMWithMessages(apiKey, modelName, messages, enhancedOptions, callback);
+
     // If strict JSON mode is enabled, return parsed JSON or throw error
     if (options.strictJsonMode) {
       if (response.parsedJson) {
@@ -183,7 +185,8 @@ export class UnifiedLLMClient {
     apiKey: string,
     modelName: string,
     messages: ChatMessage[],
-    options: UnifiedLLMOptions
+    options: UnifiedLLMOptions,
+    callback?: Callback,
   ): Promise<UnifiedLLMResponse> {
 
     const modelType = this.getModelType(modelName);
@@ -194,6 +197,21 @@ export class UnifiedLLMClient {
       messageCount: messages.length,
       hasOptions: Boolean(options),
     });
+
+    // Trace LLM call start
+    if (callback?.onStreamStart) {
+      callback.onStreamStart();
+    }
+
+    // Trace provider call
+    if (callback?.onStreamChunk) {
+      callback.onStreamChunk({
+        type: 'provider_call',
+        provider: modelType,
+        modelName,
+        messageCount: messages.length,
+      });
+    }
 
     // Convert to OpenAI format with system prompt
     const openaiMessages = this.convertToOpenAIMessages(messages, options.systemPrompt);
@@ -215,6 +233,11 @@ export class UnifiedLLMClient {
         reasoning: response.reasoning || (response as any).reasoning,
       };
 
+      // Trace LLM response
+      if (callback?.onResponse) {
+        callback.onResponse(result);
+      }
+
       // Handle strict JSON mode parsing
       if (options.strictJsonMode && result.text) {
         try {
@@ -228,6 +251,11 @@ export class UnifiedLLMClient {
         }
       }
 
+      // Trace LLM finish
+      if (callback?.onFinish) {
+        callback.onFinish();
+      }
+
       return result;
 
     } catch (error) {
@@ -236,6 +264,12 @@ export class UnifiedLLMClient {
         modelType,
         error: error instanceof Error ? error.message : String(error),
       });
+
+      // Trace LLM error
+      if (callback?.onError) {
+        callback.onError(error);
+      }
+
       throw error;
     }
   }

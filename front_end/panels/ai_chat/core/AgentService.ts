@@ -17,6 +17,7 @@ import {createAgentGraph} from './Graph.js';
 import { createLogger } from './Logger.js';
 import {type AgentState, createInitialState, createUserMessage} from './State.js';
 import type {CompiledGraph} from './Types.js';
+import { type Callback } from './Callback.js';
 
 const logger = createLogger('AgentService');
 
@@ -131,7 +132,7 @@ export class AgentService extends Common.ObjectWrapper.ObjectWrapper<{
   /**
    * Sends a message to the AI agent
    */
-  async sendMessage(text: string, imageInput?: ImageInputData, selectedAgentType?: string | null): Promise<ChatMessage> {
+  async sendMessage(text: string, imageInput?: ImageInputData, selectedAgentType?: string | null, callback?: Callback): Promise<ChatMessage> {
     // Check if the current configuration requires an API key
     const requiresApiKey = this.#doesCurrentConfigRequireApiKey();
     
@@ -141,6 +142,11 @@ export class AgentService extends Common.ObjectWrapper.ObjectWrapper<{
 
     if (!text.trim()) {
       throw new Error('Empty message. Please enter some text.');
+    }
+
+    // Trace the start of message processing
+    if (callback?.onStreamStart) {
+      callback.onStreamStart();
     }
 
     // Create a user message
@@ -166,6 +172,16 @@ export class AgentService extends Common.ObjectWrapper.ObjectWrapper<{
         currentPageTitle,
       };
 
+      // Trace agent invocation start
+      if (callback?.onStreamChunk) {
+        callback.onStreamChunk({
+          type: 'agent_service_start',
+          selectedAgentType,
+          messageCount: this.#state.messages.length,
+          userMessage: text.substring(0, 100) + (text.length > 100 ? '...' : ''),
+        });
+      }
+
       // Run the agent graph on the state
       this.#runningGraphStatePromise = this.#graph?.invoke(state);
 
@@ -179,6 +195,14 @@ export class AgentService extends Common.ObjectWrapper.ObjectWrapper<{
         // Update our messages with the messages from the current step
         this.#state.messages = currentState.messages;
 
+        // Trace state update
+        if (callback?.onStreamChunk) {
+          callback.onStreamChunk({
+            type: 'agent_state_update',
+            messageCount: this.#state.messages.length,
+          });
+        }
+
         // Notify listeners of message update immediately
         this.dispatchEventToListeners(Events.MESSAGES_CHANGED, [...this.#state.messages]);
       }
@@ -189,11 +213,21 @@ export class AgentService extends Common.ObjectWrapper.ObjectWrapper<{
           throw new Error('No state returned from agent. Please try again.');
       }
 
+      // Trace successful completion
+      if (callback?.onFinish) {
+        callback.onFinish();
+      }
+
       // Return the most recent message (could be final answer, tool call, or error)
       return finalMessage;
 
     } catch (error) {
       logger.error('Error running agent:', error);
+
+      // Trace error
+      if (callback?.onError) {
+        callback.onError(error);
+      }
 
       // Create an error message from the model
       const errorMessage: ModelChatMessage = {

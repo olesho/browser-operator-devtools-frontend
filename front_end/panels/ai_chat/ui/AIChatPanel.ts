@@ -12,6 +12,8 @@ import * as VisualLogging from '../../../ui/visual_logging/visual_logging.js';
 import {AgentService, Events as AgentEvents} from '../core/AgentService.js';
 import { LiteLLMClient } from '../core/LiteLLMClient.js';
 import { createLogger } from '../core/Logger.js';
+import { createTracingCallback, getGlobalTracingCallback } from '../core/TracingCallback.js';
+import { type Callback } from '../core/Callback.js';
 
 const logger = createLogger('AIChatPanel');
 
@@ -400,15 +402,34 @@ export class AIChatPanel extends UI.Panel.Panel {
   #liteLLMApiKey: string | null = null; // LiteLLM API key
   #liteLLMEndpoint: string | null = null; // LiteLLM endpoint
   #apiKey: string | null = null; // Regular API key
+  #tracingCallback?: Callback; // Optional tracing callback for debugging
 
   constructor() {
     super(AIChatPanel.panelName);
 
     this.#setupUI();
     this.#setupInitialState();
+    this.#initializeTracing();
     this.#initializeAgentService();
     this.performUpdate();
     this.#fetchLiteLLMModelsOnLoad();
+  }
+
+  /**
+   * Initialize tracing callback if enabled
+   */
+  #initializeTracing(): void {
+    // Check if tracing is enabled via localStorage flag
+    const isTracingEnabled = localStorage.getItem('ai_chat_enable_tracing') === 'true';
+    
+    if (isTracingEnabled) {
+      this.#tracingCallback = createTracingCallback({
+        enableConsoleLogging: true,
+        enableMetrics: true,
+        maxEvents: 1000,
+      });
+      logger.info('AI Chat tracing enabled. Use localStorage.setItem("ai_chat_enable_tracing", "false") to disable.');
+    }
   }
 
   /**
@@ -898,8 +919,8 @@ export class AIChatPanel extends UI.Panel.Panel {
     this.#setProcessingState(true);
 
     try {  
-      // Pass the selected agent type to the agent service
-      await this.#agentService.sendMessage(text, imageInput, this.#selectedAgentType);
+      // Pass the selected agent type and tracing callback to the agent service
+      await this.#agentService.sendMessage(text, imageInput, this.#selectedAgentType, this.#tracingCallback);
       // MESSAGES_CHANGED event from the agent service will update with AI response
     } catch (error) {
       this.#handleSendMessageError(error);
@@ -962,6 +983,54 @@ export class AIChatPanel extends UI.Panel.Panel {
     
     this.#messages.push(errorMessage as ChatMessage);
     this.performUpdate();
+  }
+
+  /**
+   * Get tracing metrics (useful for debugging)
+   */
+  getTracingMetrics(): any {
+    if (this.#tracingCallback && 'getMetrics' in this.#tracingCallback) {
+      return (this.#tracingCallback as any).getMetrics();
+    }
+    return null;
+  }
+
+  /**
+   * Export tracing data (useful for debugging)
+   */
+  exportTracingData(): string | null {
+    if (this.#tracingCallback && 'exportAsJSON' in this.#tracingCallback) {
+      return (this.#tracingCallback as any).exportAsJSON();
+    }
+    return null;
+  }
+
+  /**
+   * Get information about active tracing backends
+   */
+  getTracingBackends(): Array<{ type: string; config: any }> | null {
+    if (this.#tracingCallback && 'getBackendInfo' in this.#tracingCallback) {
+      return (this.#tracingCallback as any).getBackendInfo();
+    }
+    return null;
+  }
+
+  /**
+   * Flush all tracing backends
+   */
+  async flushTracing(): Promise<void> {
+    if (this.#tracingCallback && 'flush' in this.#tracingCallback) {
+      await (this.#tracingCallback as any).flush();
+    }
+  }
+
+  /**
+   * Send metrics to all tracing backends
+   */
+  async sendTracingMetrics(): Promise<void> {
+    if (this.#tracingCallback && 'sendMetricsToBackends' in this.#tracingCallback) {
+      await (this.#tracingCallback as any).sendMetricsToBackends();
+    }
   }
 
   override wasShown(): void {

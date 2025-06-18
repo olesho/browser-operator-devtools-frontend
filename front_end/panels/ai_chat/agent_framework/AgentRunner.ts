@@ -7,6 +7,7 @@ import { UnifiedLLMClient, type UnifiedLLMResponse, type ParsedLLMAction } from 
 import type { Tool } from '../tools/Tools.js';
 import { ChatMessageEntity, type ChatMessage, type ModelChatMessage, type ToolResultMessage } from '../ui/ChatView.js';
 import { createLogger } from '../core/Logger.js';
+import { type Callback } from '../core/Callback.js';
 
 const logger = createLogger('AgentRunner');
 
@@ -59,7 +60,8 @@ export class AgentRunner {
     defaultTemperature: number,
     defaultCreateSuccessResult: AgentRunnerHooks['createSuccessResult'],
     defaultCreateErrorResult: AgentRunnerHooks['createErrorResult'],
-    llmToolArgs?: ConfigurableAgentArgs // Specific args if triggered by LLM tool call
+    llmToolArgs?: ConfigurableAgentArgs, // Specific args if triggered by LLM tool call
+    callback?: Callback,
   ): Promise<ConfigurableAgentResult> {
     const targetAgentName = handoffConfig.targetAgentName;
     const targetAgentTool = ToolRegistry.getRegisteredTool(targetAgentName);
@@ -140,7 +142,8 @@ export class AgentRunner {
         targetAgentArgs, // Use determined args
         targetRunnerConfig, // Pass the constructed config
         targetRunnerHooks,  // Pass the constructed hooks
-        targetAgentTool // Target agent is now the executing agent
+        targetAgentTool, // Target agent is now the executing agent
+        callback // Pass callback through to recursive call
     );
 
     logger.info('Handoff target agent ${targetAgentTool.name} finished. Result success: ${handoffResult.success}');
@@ -178,7 +181,8 @@ export class AgentRunner {
     args: ConfigurableAgentArgs,
     config: AgentRunnerConfig,
     hooks: AgentRunnerHooks,
-    executingAgent: ConfigurableAgentTool | null
+    executingAgent: ConfigurableAgentTool | null,
+    callback?: Callback,
   ): Promise<ConfigurableAgentResult> {
     const agentName = executingAgent?.name || 'Unknown';
     logger.info('Starting execution loop for agent: ${agentName}');
@@ -249,6 +253,18 @@ export class AgentRunner {
       let llmResponse: UnifiedLLMResponse;
       try {
         logger.info('${agentName} Calling LLM with ${messages.length} messages');
+        
+        // Trace agent iteration start
+        if (callback?.onStreamChunk) {
+          callback.onStreamChunk({
+            type: 'agent_iteration',
+            agentName,
+            iteration: iteration + 1,
+            maxIterations,
+            messageCount: messages.length,
+          });
+        }
+
         llmResponse = await UnifiedLLMClient.callLLMWithMessages(
           apiKey,
           modelName,
@@ -257,7 +273,8 @@ export class AgentRunner {
             tools: toolSchemas,
             systemPrompt: currentSystemPrompt,
             temperature: temperature ?? 0,
-          }
+          },
+          callback
         );
       } catch (error: any) {
         logger.error(`${agentName} LLM call failed:`, error);
@@ -297,6 +314,16 @@ export class AgentRunner {
           messages.push(newModelMessage);
           logger.info('${agentName} LLM requested tool: ${toolName}');
 
+          // Trace tool execution start
+          if (callback?.onStreamChunk) {
+            callback.onStreamChunk({
+              type: 'tool_execution_start',
+              toolName,
+              toolArgs,
+              agentName,
+            });
+          }
+
           // Execute tool
           const toolToExecute = toolMap.get(toolName);
           if (!toolToExecute) {
@@ -320,6 +347,17 @@ export class AgentRunner {
                   throw new Error(`Internal error: No matching 'llm_tool_call' handoff config found for ${toolName}`);
               }
 
+              // Trace handoff
+              if (callback?.onStreamChunk) {
+                callback.onStreamChunk({
+                  type: 'agent_handoff',
+                  fromAgent: agentName,
+                  toAgent: targetAgentTool.name,
+                  trigger: 'llm_tool_call',
+                  toolArgs,
+                });
+              }
+
               // Use the shared handoff execution logic, passing LLM's toolArgs
               const handoffResult = await AgentRunner.executeHandoff(
                   messages, // Pass current message history
@@ -328,7 +366,8 @@ export class AgentRunner {
                   executingAgent!, // executingAgent must exist if handoff config was found
                   apiKey, modelName, maxIterations, temperature ?? 0,
                   createSuccessResult, createErrorResult,
-                  toolArgs as ConfigurableAgentArgs // <= Pass LLM's toolArgs explicitly as llmToolArgs
+                  toolArgs as ConfigurableAgentArgs, // <= Pass LLM's toolArgs explicitly as llmToolArgs
+                  callback
               );
 
               // LLM tool handoff replaces the current agent's execution entirely
@@ -356,11 +395,30 @@ export class AgentRunner {
                     toolResultText = toolResultData.error || toolResultData.message || toolResultText;
                  }
               }
+
+              // Trace tool execution success
+              if (callback?.onStreamChunk) {
+                callback.onStreamChunk({
+                  type: 'tool_execution_success',
+                  toolName,
+                  resultText: toolResultText,
+                  isError: toolIsError,
+                });
+              }
              } catch (err: any) {
               logger.error(`${agentName} Error executing tool ${toolToExecute.name}:`, err);
               toolResultText = `Error during tool execution: ${err.message || String(err)}`;
               toolIsError = true;
               toolResultData = { error: toolResultText }; // Store error in data
+
+              // Trace tool execution error
+              if (callback?.onStreamChunkError) {
+                callback.onStreamChunkError({
+                  type: 'tool_execution_error',
+                  toolName,
+                  error: toolResultText,
+                });
+              }
              }
           }
 
@@ -388,6 +446,16 @@ export class AgentRunner {
           };
           messages.push(newModelMessage);
           logger.info('${agentName} LLM provided final answer.');
+
+          // Trace final answer
+          if (callback?.onStreamChunk) {
+            callback.onStreamChunk({
+              type: 'final_answer',
+              agentName,
+              answer,
+            });
+          }
+
           // Exit loop and return success with 'final_answer' reason
           return createSuccessResult(answer, messages, 'final_answer');
 
@@ -421,6 +489,16 @@ export class AgentRunner {
         if (maxIterHandoffConfig) {
             logger.info(`${agentName} Found 'max_iterations' handoff config. Initiating handoff to ${maxIterHandoffConfig.targetAgentName}.`);
 
+            // Trace max iterations handoff
+            if (callback?.onStreamChunk) {
+              callback.onStreamChunk({
+                type: 'agent_handoff',
+                fromAgent: agentName,
+                toAgent: maxIterHandoffConfig.targetAgentName,
+                trigger: 'max_iterations',
+              });
+            }
+
             // Use the shared handoff execution logic
             // Pass the original `args` received by *this* agent runner instance. No llmToolArgs here.
             const handoffResult = await AgentRunner.executeHandoff(
@@ -429,7 +507,9 @@ export class AgentRunner {
                 maxIterHandoffConfig,
                 executingAgent,
                 apiKey, modelName, maxIterations, temperature ?? 0,
-                createSuccessResult, createErrorResult
+                createSuccessResult, createErrorResult,
+                undefined, // No llmToolArgs for max_iterations trigger
+                callback
             );
             return handoffResult; // Return the result from the handoff target
         }

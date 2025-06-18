@@ -10,6 +10,7 @@ import { enhancePromptWithPageContext } from './PageInfoManager.js';
 import type { AgentState } from './State.js';
 import { UnifiedLLMClient } from './UnifiedLLMClient.js';
 import { ChatMessageEntity, type ChatMessage } from '../ui/ChatView.js';
+import { type Callback } from './Callback.js';
 
 const logger = createLogger('ChatLiteLLM');
 
@@ -25,7 +26,7 @@ interface ModelResponse {
 
 interface Model {
   generate(prompt: string, systemPrompt: string, state: AgentState): Promise<ModelResponse>;
-  generateWithMessages(messages: ChatMessage[], systemPrompt: string, state: AgentState): Promise<ModelResponse>;
+  generateWithMessages(messages: ChatMessage[], systemPrompt: string, state: AgentState, callback?: Callback): Promise<ModelResponse>;
   resetCallCount(): void;
 }
 
@@ -75,7 +76,7 @@ export class ChatLiteLLM implements Model {
     return this.generateWithMessages(messages, systemPrompt, state);
   }
 
-  async generateWithMessages(messages: ChatMessage[], systemPrompt: string, state: AgentState): Promise<ModelResponse> {
+  async generateWithMessages(messages: ChatMessage[], systemPrompt: string, state: AgentState, callback?: Callback): Promise<ModelResponse> {
     // Increment the call counter
     this.callCount++;
 
@@ -114,7 +115,8 @@ export class ChatLiteLLM implements Model {
           tools,
           systemPrompt: enhancedSystemPrompt,
           temperature: this.temperature,
-        }
+        },
+        callback // Pass callback through
       );
 
       // Process the response using UnifiedLLMClient's parser
