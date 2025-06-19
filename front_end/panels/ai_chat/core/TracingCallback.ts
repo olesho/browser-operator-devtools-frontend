@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// import { Langfuse } from "langfuse";
 import { type Callback } from './Callback.js';
 import { createLogger } from './Logger.js';
 import { 
@@ -12,22 +11,25 @@ import {
   type TracingBackendConfig 
 } from './TracingBackends.js';
 
-// const langfuse = new Langfuse({
-//   secretKey: "sk-lf-b3418820-2b0f-41c6-9949-9c09a37e22e4",
-//   publicKey: "pk-lf-051654b9-f6d2-46e4-9d78-30e3cff05204",
-//   baseUrl: "http://localhost:3000"
-// });
-
-// const trace = langfuse.trace({
-//   name: "browser-operator-tracing",
-// });
-
 const logger = createLogger('TracingCallback');
 
 export interface TraceEvent {
   timestamp: number;
   type: string;
   data: any;
+}
+
+export interface LLMCallContext {
+  messages?: any[];
+  openaiMessages?: any[];
+  systemPrompt?: string;
+  modelName?: string;
+  modelType?: string;
+  tools?: any[];
+  messageCount?: number;
+  hasMessages?: boolean;
+  hasSystemPrompt?: boolean;
+  hasTools?: boolean;
 }
 
 export interface TracingOptions {
@@ -45,6 +47,7 @@ export class TracingCallback implements Callback {
   private startTime?: number;
   private options: TracingOptions;
   private backends: TracingBackend[] = [];
+  private currentLLMContext?: LLMCallContext; // Store the current LLM call context
 
   constructor(options: TracingOptions = {}) {
     this.options = {
@@ -117,8 +120,7 @@ export class TracingCallback implements Callback {
     for (const backend of this.backends) {
       try {
         await backend.sendEvent(event);
-        // Ensure we flush after sending events
-        await backend.flush();
+        // Don't flush here - let backends handle their own batching/flushing
       } catch (error) {
         logger.error(`Failed to send event to ${backend.type} backend:`, error);
       }
@@ -127,6 +129,11 @@ export class TracingCallback implements Callback {
 
   onResponse(response: any): void {
     this.addEvent('llm_response', {
+      // Include actual content for Langfuse tracing
+      text: response.text,
+      functionCall: response.functionCall,
+      reasoning: response.reasoning,
+      // Keep metadata for other backends
       hasText: Boolean(response.text),
       hasFunctionCall: Boolean(response.functionCall),
       hasReasoning: Boolean(response.reasoning),
@@ -166,10 +173,43 @@ export class TracingCallback implements Callback {
 
   onStreamStart(): void {
     this.startTime = Date.now();
-    this.addEvent('llm_stream_start', {});
+    
+    // Include the captured LLM context (messages, system prompt, etc.)
+    const contextData = this.currentLLMContext ? {
+      // Include actual prompt/messages for Langfuse tracing
+      messages: this.currentLLMContext.messages,
+      openaiMessages: this.currentLLMContext.openaiMessages,
+      systemPrompt: this.currentLLMContext.systemPrompt,
+      modelName: this.currentLLMContext.modelName,
+      modelType: this.currentLLMContext.modelType,
+      tools: this.currentLLMContext.tools,
+      messageCount: this.currentLLMContext.messageCount,
+      // Keep metadata for backward compatibility
+      hasMessages: Boolean(this.currentLLMContext.messages),
+      hasSystemPrompt: Boolean(this.currentLLMContext.systemPrompt),
+      hasTools: Boolean(this.currentLLMContext.tools && this.currentLLMContext.tools.length > 0),
+    } : {};
+    
+    this.addEvent('llm_stream_start', contextData);
+    
+    // Clear the context after using it
+    this.currentLLMContext = undefined;
   }
 
   onStreamChunk(chunk: any): void {
+    // Capture LLM context for use in onStreamStart
+    if (chunk.type === 'llm_call_context') {
+      this.currentLLMContext = {
+        messages: chunk.messages,
+        openaiMessages: chunk.openaiMessages,
+        systemPrompt: chunk.systemPrompt,
+        modelName: chunk.modelName,
+        modelType: chunk.modelType,
+        tools: chunk.tools,
+        messageCount: chunk.messageCount,
+      };
+    }
+    
     this.addEvent('llm_stream_chunk', chunk);
   }
 
@@ -181,6 +221,19 @@ export class TracingCallback implements Callback {
 
   onStreamChunkFinish(): void {
     this.addEvent('llm_stream_chunk_finish', {});
+  }
+
+  /**
+   * Cleanup and flush all backends
+   */
+  async cleanup(): Promise<void> {
+    for (const backend of this.backends) {
+      try {
+        await backend.close();
+      } catch (error) {
+        logger.error(`Failed to close ${backend.type} backend:`, error);
+      }
+    }
   }
 
   /**

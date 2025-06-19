@@ -198,6 +198,23 @@ export class UnifiedLLMClient {
       hasOptions: Boolean(options),
     });
 
+    // Convert to OpenAI format with system prompt first
+    const openaiMessages = this.convertToOpenAIMessages(messages, options.systemPrompt);
+
+    // Trace LLM call context before start - this provides all input data for tracing
+    if (callback?.onStreamChunk) {
+      callback.onStreamChunk({
+        type: 'llm_call_context',
+        messages,
+        openaiMessages,
+        systemPrompt: options.systemPrompt,
+        modelName,
+        modelType,
+        tools: options.tools,
+        messageCount: messages.length,
+      });
+    }
+
     // Trace LLM call start
     if (callback?.onStreamStart) {
       callback.onStreamStart();
@@ -212,9 +229,6 @@ export class UnifiedLLMClient {
         messageCount: messages.length,
       });
     }
-
-    // Convert to OpenAI format with system prompt
-    const openaiMessages = this.convertToOpenAIMessages(messages, options.systemPrompt);
     
     logger.info(`Converted to OpenAI messages:\n${JSON.stringify(openaiMessages, null, 2)}`);
 

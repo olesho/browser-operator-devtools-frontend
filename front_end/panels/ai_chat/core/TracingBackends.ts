@@ -11,7 +11,7 @@ const logger = createLogger('TracingBackends');
  * Configuration for tracing backends
  */
 export interface TracingBackendConfig {
-  type: 'http' | 'console' | 'websocket' | 'file';
+  type: 'http' | 'console' | 'websocket' | 'file' | 'langfuse';
   enabled: boolean;
   [key: string]: any; // Allow additional configuration per backend type
 }
@@ -30,6 +30,15 @@ export interface ConsoleBackendConfig extends TracingBackendConfig {
   type: 'console';
   logLevel?: 'info' | 'debug' | 'warn';
   includeMetrics?: boolean;
+}
+
+export interface LangfuseBackendConfig extends TracingBackendConfig {
+  type: 'langfuse';
+  secretKey: string;
+  publicKey: string;
+  baseUrl?: string;
+  flushInterval?: number;
+  batchSize?: number;
 }
 
 /**
@@ -239,6 +248,525 @@ export class ConsoleTracingBackend implements TracingBackend {
 }
 
 /**
+ * Langfuse backend for sending traces to Langfuse server using SDK
+ */
+// Simple Langfuse HTTP implementation
+class SimpleLangfuse {
+  private config: any;
+  private pendingEvents: any[] = [];
+
+  constructor(config: any) {
+    this.config = config;
+  }
+
+  trace(options: any) {
+    const traceId = options.id || `trace-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const timestamp = options.timestamp || new Date();
+    
+    // Create trace-create event
+    this.pendingEvents.push({
+      id: traceId,
+      type: 'trace-create',
+      timestamp: timestamp.toISOString(),
+      body: {
+        id: traceId,
+        name: options.name,
+        timestamp: timestamp.toISOString(),
+        metadata: options.metadata || {},
+        userId: options.userId,
+        sessionId: options.sessionId,
+        input: options.input,
+        output: options.output,
+        tags: options.tags || [],
+      }
+    });
+    
+    return {
+      id: traceId,
+      span: (spanOptions: any) => {
+        const spanId = spanOptions.id || `span-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const spanTimestamp = spanOptions.startTime || new Date();
+        
+        this.pendingEvents.push({
+          id: spanId,
+          type: 'span-create',
+          timestamp: spanTimestamp.toISOString(),
+          body: {
+            id: spanId,
+            traceId: traceId,
+            name: spanOptions.name,
+            startTime: spanTimestamp.toISOString(),
+            metadata: spanOptions.metadata || {},
+            input: spanOptions.input,
+          }
+        });
+        
+        return {
+          id: spanId,
+          end: (endOptions?: any) => {
+            this.pendingEvents.push({
+              id: spanId,
+              type: 'span-update',
+              timestamp: new Date().toISOString(),
+              body: {
+                id: spanId,
+                traceId: traceId,
+                endTime: (endOptions && endOptions.endTime) ? endOptions.endTime.toISOString() : new Date().toISOString(),
+                output: endOptions ? endOptions.output : undefined,
+                metadata: endOptions ? endOptions.metadata : {},
+              }
+            });
+          }
+        };
+      },
+      generation: (genOptions: any) => {
+        const genId = genOptions.id || `gen-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const genTimestamp = genOptions.startTime || new Date();
+        
+        this.pendingEvents.push({
+          id: genId,
+          type: 'generation-create',
+          timestamp: genTimestamp.toISOString(),
+          body: {
+            id: genId,
+            traceId: traceId,
+            name: genOptions.name,
+            model: genOptions.model || 'unknown',
+            input: genOptions.input,
+            startTime: genTimestamp.toISOString(),
+            metadata: genOptions.metadata || {},
+          }
+        });
+        
+        return {
+          id: genId,
+          end: (endOptions?: any) => {
+            this.pendingEvents.push({
+              id: genId,
+              type: 'generation-update',
+              timestamp: new Date().toISOString(),
+              body: {
+                id: genId,
+                traceId: traceId,
+                endTime: (endOptions && endOptions.endTime) ? endOptions.endTime.toISOString() : new Date().toISOString(),
+                output: endOptions ? endOptions.output : undefined,
+                usage: endOptions ? endOptions.usage : undefined,
+                metadata: endOptions ? endOptions.metadata : {},
+              }
+            });
+          }
+        };
+      },
+      event: (eventOptions: any) => {
+        const eventId = `event-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const eventTimestamp = eventOptions.timestamp || new Date();
+        
+        this.pendingEvents.push({
+          id: eventId,
+          type: 'event-create',
+          timestamp: eventTimestamp.toISOString(),
+          body: {
+            id: eventId,
+            traceId: traceId,
+            name: eventOptions.name,
+            level: eventOptions.level || 'DEFAULT',
+            statusMessage: eventOptions.statusMessage,
+            metadata: eventOptions.metadata || {},
+            timestamp: eventTimestamp.toISOString(),
+            input: eventOptions.input,
+            output: eventOptions.output,
+          }
+        });
+        
+        return { id: eventId };
+      },
+      update: (updates: any) => {
+        this.pendingEvents.push({
+          id: traceId,
+          type: 'trace-update',
+          timestamp: new Date().toISOString(),
+          body: {
+            id: traceId,
+            endTime: updates.endTime ? updates.endTime.toISOString() : new Date().toISOString(),
+            metadata: updates.metadata || {},
+            output: updates.output,
+          }
+        });
+      }
+    };
+  }
+
+  event(options: any) {
+    const eventId = `event-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const eventTimestamp = options.timestamp || new Date();
+    
+    this.pendingEvents.push({
+      id: eventId,
+      type: 'event-create',
+      timestamp: eventTimestamp.toISOString(),
+      body: {
+        id: eventId,
+        name: options.name,
+        level: options.level || 'DEFAULT',
+        statusMessage: options.statusMessage,
+        metadata: options.metadata || {},
+        timestamp: eventTimestamp.toISOString(),
+        input: options.input,
+        output: options.output,
+      }
+    });
+    
+    return { id: eventId };
+  }
+
+  async flush() {
+    if (this.pendingEvents.length === 0) return;
+    
+    logger.info(`[Langfuse] Flushing ${this.pendingEvents.length} events`);
+    
+    try {
+      const payload = { batch: this.pendingEvents };
+      const url = `${this.config.baseUrl || 'http://localhost:3000'}/api/public/ingestion`;
+      
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Basic ' + btoa(`${this.config.publicKey}:${this.config.secretKey}`),
+          'X-Langfuse-Sdk-Name': 'langfuse-js',
+          'X-Langfuse-Sdk-Version': '3.0.0',
+          'X-Langfuse-Sdk-Variant': 'devtools-ai-chat',
+          'X-Langfuse-Public-Key': this.config.publicKey,
+        },
+        body: JSON.stringify(payload),
+      });
+      
+      if (response.ok) {
+        logger.info(`[Langfuse] Successfully sent ${this.pendingEvents.length} events`);
+        this.pendingEvents = [];
+      } else {
+        const errorText = await response.text();
+        logger.error(`[Langfuse] Failed to send events: ${response.status} ${response.statusText}`, errorText);
+      }
+    } catch (error) {
+      logger.error('[Langfuse] Error sending events:', error);
+    }
+  }
+
+  async shutdown() {
+    await this.flush();
+    logger.info('[Langfuse] Shutdown complete');
+  }
+}
+
+export class LangfuseTracingBackend implements TracingBackend {
+  readonly type = 'langfuse';
+  readonly config: LangfuseBackendConfig;
+  
+  private langfuse: SimpleLangfuse | null = null;
+  private currentTrace: any = null;
+  private spans: Map<string, any> = new Map();
+  private flushTimer?: number;
+  private initialized = false;
+
+  constructor(config: LangfuseBackendConfig) {
+    this.config = {
+      baseUrl: 'https://cloud.langfuse.com',
+      flushInterval: 5000,
+      batchSize: 50,
+      ...config,
+    };
+    
+    logger.info('Langfuse backend constructor called with config:', {
+      type: config.type,
+      enabled: config.enabled,
+      baseUrl: this.config.baseUrl,
+      hasSecretKey: !!this.config.secretKey,
+      hasPublicKey: !!this.config.publicKey,
+    });
+    
+    // Initialize Langfuse SDK
+    this.initializeLangfuse();
+    
+    // Start periodic flush
+    if (this.config.flushInterval && this.config.flushInterval > 0) {
+      this.flushTimer = window.setInterval(() => {
+        this.flush().catch(error => {
+          logger.error('Langfuse periodic flush failed:', error);
+        });
+      }, this.config.flushInterval);
+    }
+  }
+
+  private async initializeLangfuse(): Promise<void> {
+    try {
+      // Initialize Langfuse with config
+      this.langfuse = new SimpleLangfuse({
+        secretKey: this.config.secretKey,
+        publicKey: this.config.publicKey,
+        baseUrl: this.config.baseUrl,
+      });
+      
+      this.initialized = true;
+      logger.info('Langfuse backend initialized successfully');
+    } catch (error) {
+      logger.error('Failed to initialize Langfuse backend:', error);
+      this.initialized = false;
+    }
+  }
+
+  async sendEvent(event: TraceEvent): Promise<void> {
+    if (!this.initialized || !this.langfuse) {
+      logger.warn('Langfuse not initialized yet, queuing event');
+      return;
+    }
+    
+    // Debug log to see the structure of events
+    logger.info(`Langfuse backend received event: ${event.type}`);
+    logger.info('Event data structure:', JSON.stringify(event.data, null, 2));
+    
+    try {
+      await this.processEvent(event);
+    } catch (error) {
+      logger.error(`Failed to process Langfuse event ${event.type}:`, error);
+    }
+  }
+
+  async sendBatch(events: TraceEvent[]): Promise<void> {
+    for (const event of events) {
+      await this.sendEvent(event);
+    }
+    await this.flush();
+  }
+
+  async sendMetrics(metrics: any): Promise<void> {
+    if (!this.langfuse) return;
+    
+    try {
+      // Create an event for metrics
+      this.langfuse.event({
+        name: 'metrics',
+        metadata: metrics,
+      });
+      
+      logger.info('Sent metrics to Langfuse:', metrics);
+    } catch (error) {
+      logger.error('Failed to send metrics to Langfuse:', error);
+    }
+  }
+
+  private async processEvent(event: TraceEvent): Promise<void> {
+    if (!this.langfuse) return;
+    
+    const eventTime = new Date(event.timestamp);
+
+    switch (event.type) {
+      case 'llm_stream_start':
+        // Start a new trace for each LLM interaction
+        this.currentTrace = this.langfuse.trace({
+          name: 'ai-chat-conversation',
+          input: {
+            messages: event.data?.messages,
+            systemPrompt: event.data?.systemPrompt,
+            modelName: event.data?.modelName,
+            tools: event.data?.tools,
+          },
+          userId: event.data?.userId,
+          sessionId: event.data?.sessionId,
+          metadata: {
+            modelType: event.data?.modelType,
+            messageCount: event.data?.messageCount,
+            hasMessages: event.data?.hasMessages,
+            hasSystemPrompt: event.data?.hasSystemPrompt,
+            hasTools: event.data?.hasTools,
+            ...event.data,
+          },
+          timestamp: eventTime,
+        });
+        logger.info(`Started new Langfuse trace with ${event.data?.messageCount || 0} messages`);
+        break;
+
+      case 'llm_response':
+        if (this.currentTrace) {
+          const generation = this.currentTrace.generation({
+            name: 'llm-response',
+            model: event.data?.modelName || event.data?.model || 'unknown',
+            startTime: eventTime,
+            metadata: {
+              hasText: event.data?.hasText,
+              hasFunctionCall: event.data?.hasFunctionCall,
+              hasReasoning: event.data?.hasReasoning,
+              textLength: event.data?.textLength,
+              functionName: event.data?.functionCall?.name,
+            },
+          });
+          
+          // End the generation immediately with the response
+          generation.end({
+            endTime: eventTime,
+            output: {
+              text: event.data?.text,
+              functionCall: event.data?.functionCall,
+              reasoning: event.data?.reasoning,
+            },
+            usage: event.data?.usage,
+          });
+        }
+        break;
+
+      case 'llm_error':
+        if (this.currentTrace) {
+          this.currentTrace.event({
+            name: 'llm-error',
+            level: 'ERROR',
+            metadata: event.data,
+            timestamp: eventTime,
+          });
+        }
+        break;
+
+      case 'llm_stream_chunk':
+        // Handle streaming chunks - these often contain the actual content
+        if (this.currentTrace) {
+          // Only log meaningful chunks, not empty or metadata-only chunks
+          const hasContent = event.data?.content || event.data?.text || event.data?.delta?.content;
+          if (hasContent) {
+            this.currentTrace.event({
+              name: 'llm-stream-chunk',
+              metadata: {
+                chunkIndex: event.data?.index,
+                finishReason: event.data?.finishReason,
+                timestamp: eventTime.toISOString(),
+              },
+              output: event.data?.content || event.data?.text || event.data?.delta?.content,
+              timestamp: eventTime,
+            });
+          }
+        }
+        break;
+
+      case 'llm_finish':
+      case 'llm_stream_finish':
+        if (this.currentTrace) {
+          this.currentTrace.update({
+            endTime: eventTime,
+            output: event.data?.result || event.data?.response || event.data?.content,
+            metadata: { 
+              duration: event.data?.duration,
+              totalTokens: event.data?.totalTokens,
+              ...event.data,
+            },
+          });
+          logger.info('Finished Langfuse trace with duration:', event.data?.duration);
+        }
+        break;
+
+      case 'tool_execution_start':
+        if (this.currentTrace) {
+          const span = this.currentTrace.span({
+            name: event.data?.toolName || 'tool-execution',
+            startTime: eventTime,
+            metadata: event.data,
+          });
+          this.spans.set(event.data?.toolName || 'default', span);
+        }
+        break;
+
+      case 'tool_execution_end':
+        const toolName = event.data?.toolName || 'default';
+        const span = this.spans.get(toolName);
+        if (span) {
+          span.end({
+            endTime: eventTime,
+            output: event.data?.result,
+            metadata: event.data,
+          });
+          this.spans.delete(toolName);
+        }
+        break;
+
+      case 'tool_execution_error':
+        const errorToolName = event.data?.toolName || 'default';
+        const errorSpan = this.spans.get(errorToolName);
+        if (errorSpan) {
+          errorSpan.end({
+            endTime: eventTime,
+            output: { error: event.data?.message },
+            metadata: { 
+              ...event.data,
+              level: 'ERROR',
+              statusMessage: event.data?.message,
+            },
+          });
+          this.spans.delete(errorToolName);
+        }
+        break;
+
+      case 'agent_iteration':
+        if (this.currentTrace) {
+          this.currentTrace.event({
+            name: 'agent-iteration',
+            metadata: event.data,
+            timestamp: eventTime,
+          });
+        }
+        break;
+
+      default:
+        // Handle other event types as generic events
+        if (this.currentTrace) {
+          this.currentTrace.event({
+            name: event.type,
+            metadata: event.data,
+            timestamp: eventTime,
+          });
+        } else {
+          // Create standalone event if no trace is active
+          this.langfuse.event({
+            name: event.type,
+            metadata: event.data,
+            timestamp: eventTime,
+          });
+        }
+        break;
+    }
+  }
+
+  async flush(): Promise<void> {
+    if (!this.langfuse) {
+      logger.warn('Langfuse not initialized, cannot flush');
+      return;
+    }
+    
+    try {
+      logger.info('Flushing Langfuse traces...');
+      await this.langfuse.flush();
+      logger.info('Successfully flushed Langfuse traces');
+    } catch (error) {
+      logger.error('Failed to flush Langfuse traces:', error);
+      throw error;
+    }
+  }
+
+  async close(): Promise<void> {
+    if (this.flushTimer) {
+      clearInterval(this.flushTimer);
+      this.flushTimer = undefined;
+    }
+    
+    try {
+      await this.flush();
+      if (this.langfuse) {
+        await this.langfuse.shutdown();
+      }
+      logger.info('Langfuse backend closed successfully');
+    } catch (error) {
+      logger.error('Error closing Langfuse backend:', error);
+    }
+  }
+}
+
+/**
  * Factory for creating tracing backends
  */
 export class TracingBackendFactory {
@@ -248,6 +776,7 @@ export class TracingBackendFactory {
     // Register built-in backends
     TracingBackendFactory.register('http', HTTPTracingBackend);
     TracingBackendFactory.register('console', ConsoleTracingBackend);
+    TracingBackendFactory.register('langfuse', LangfuseTracingBackend);
   }
   
   /**
@@ -287,7 +816,7 @@ export class TracingBackendConfigHelper {
   /**
    * Create HTTP backend config for localhost development
    */
-  static createHTTPConfig(url: string = 'http://localhost:8888'): HTTPBackendConfig {
+  static createHTTPConfig(url: string = 'http://localhost:8888/api/v1/traces'): HTTPBackendConfig {
     return {
       type: 'http',
       enabled: true,
@@ -312,6 +841,21 @@ export class TracingBackendConfigHelper {
       enabled: true,
       logLevel,
       includeMetrics: true,
+    };
+  }
+  
+  /**
+   * Create Langfuse backend config
+   */
+  static createLangfuseConfig(secretKey: string, publicKey: string, baseUrl: string = 'http://localhost:3000'): LangfuseBackendConfig {
+    return {
+      type: 'langfuse',
+      enabled: true,
+      secretKey,
+      publicKey,
+      baseUrl,
+      batchSize: 50,
+      flushInterval: 5000,
     };
   }
   
@@ -348,6 +892,13 @@ export class TracingBackendConfigHelper {
    * Get default configs based on simple flags
    */
   static getDefaultConfigs(): TracingBackendConfig[] {
+    // First try to get configs from localStorage
+    const storedConfigs = TracingBackendConfigHelper.parseFromLocalStorage();
+    if (storedConfigs.length > 0) {
+      return storedConfigs;
+    }
+    
+    // Fallback to default configs based on simple flags
     const configs: TracingBackendConfig[] = [];
     
     // Always add HTTP backend with default URL
@@ -367,21 +918,35 @@ export class TracingBackendConfigHelper {
 // Enable tracing
 localStorage.setItem('ai_chat_enable_tracing', 'true');
 
-// Set up the HTTP backend configuration
-const backendConfigs = [
-  {
-    type: 'http',
-    enabled: true,
-    url: 'http://localhost:8888/traces',  // Note: include /traces path
-    method: 'POST',
-    batchSize: 20,
-    flushInterval: 3000,
-    timeout: 5000,
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Source': 'devtools-ai-chat'
-    }
+// Example backend configurations:
+
+// HTTP backend configuration
+const httpBackendConfig = {
+  type: 'http',
+  enabled: true,
+  url: 'http://localhost:8888/api/v1/traces',
+  method: 'POST',
+  batchSize: 20,
+  flushInterval: 3000,
+  timeout: 5000,
+  headers: {
+    'Content-Type': 'application/json',
+    'X-Source': 'devtools-ai-chat'
   }
-];
+};
+
+// Langfuse backend configuration
+const langfuseBackendConfig = {
+  type: 'langfuse',
+  enabled: true,
+  secretKey: 'sk-lf-c49b659b-9046-4e9c-a4ad-7ed0048ed9b9',
+  publicKey: 'pk-lf-3671be28-398a-434b-8544-a5949f32d848',
+  baseUrl: 'http://localhost:3000',  // or 'https://cloud.langfuse.com' for cloud
+  batchSize: 50,
+  flushInterval: 5000
+};
+
+// Set up multiple backends
+const backendConfigs = [httpBackendConfig, langfuseBackendConfig];
 
 localStorage.setItem('ai_chat_tracing_backends', JSON.stringify(backendConfigs)); 
