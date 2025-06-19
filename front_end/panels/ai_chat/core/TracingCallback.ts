@@ -208,6 +208,19 @@ export class TracingCallback implements Callback {
         tools: chunk.tools,
         messageCount: chunk.messageCount,
       };
+      return; // Don't add this as a regular chunk event
+    }
+    
+    // Handle callLLM invocation events
+    if (chunk.type === 'call_llm_invocation') {
+      this.addEvent('call_llm_invocation', chunk);
+      return;
+    }
+    
+    // Handle callLLM completion events
+    if (chunk.type === 'call_llm_completion' || chunk.type === 'call_llm_json_parsed' || chunk.type === 'call_llm_error') {
+      this.addEvent(chunk.type, chunk);
+      return;
     }
     
     this.addEvent('llm_stream_chunk', chunk);

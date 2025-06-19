@@ -7,6 +7,7 @@ import {OpenAIClient, type OpenAIResponse} from './OpenAIClient.js';
 import { createLogger } from './Logger.js';
 import { ChatMessageEntity, type ChatMessage } from '../ui/ChatView.js';
 import { Callback } from './Callback.js';
+import { TracingCallback } from './TracingCallback.js';
 
 const logger = createLogger('UnifiedLLMClient');
 
@@ -125,6 +126,51 @@ export class UnifiedLLMClient {
   private static readonly LITELLM_API_KEY_KEY = 'ai_chat_litellm_api_key';
 
   /**
+   * Creates a default tracing callback if tracing is enabled
+   */
+  private static createDefaultTracingCallback(): TracingCallback | undefined {
+    try {
+      // Check if tracing is enabled via localStorage
+      if (typeof window !== 'undefined' && window.localStorage) {
+        const tracingEnabled = window.localStorage.getItem('ai_chat_enable_tracing');
+        if (tracingEnabled === 'true') {
+          return new TracingCallback();
+        }
+      }
+    } catch (error) {
+      // Silently ignore localStorage access errors
+      logger.debug('Could not access localStorage for tracing config:', error);
+    }
+    return undefined;
+  }
+
+  /**
+   * Attempts to infer the tool name from the stack trace
+   */
+  private static inferToolNameFromStackTrace(): string | undefined {
+    try {
+      const stack = new Error().stack;
+      if (!stack) return undefined;
+      
+      // Look for tool class names in the stack trace
+      const toolMatch = stack.match(/(\w+Tool)\.(?:execute|run|call)/);
+      if (toolMatch) {
+        return toolMatch[1];
+      }
+      
+      // Look for other common patterns
+      const classMatch = stack.match(/(\w+)\.callLLM/);
+      if (classMatch && classMatch[1] !== 'UnifiedLLMClient') {
+        return classMatch[1];
+      }
+      
+      return undefined;
+    } catch (error) {
+      return undefined;
+    }
+  }
+
+  /**
    * Main unified method to call any LLM based on model configuration
    * Returns string for backward compatibility, or parsed JSON if strictJsonMode is enabled
    */
@@ -135,6 +181,9 @@ export class UnifiedLLMClient {
     options: UnifiedLLMOptions,
     callback?: Callback,
   ): Promise<string | any> {
+    // Create default tracing callback if none provided and tracing is enabled
+    const effectiveCallback = callback || this.createDefaultTracingCallback();
+    
     // Convert simple prompt to message format
     const messages = [{
       entity: ChatMessageEntity.USER as const,
@@ -154,7 +203,35 @@ export class UnifiedLLMClient {
       };
     }
 
-    const response = await this.callLLMWithMessages(apiKey, modelName, messages, enhancedOptions, callback);
+    // Send additional context for callLLM invocations
+    if (effectiveCallback) {
+      effectiveCallback.onStreamChunk({
+        type: 'call_llm_invocation',
+        method: 'callLLM',
+        userPrompt,
+        modelName,
+        systemPrompt: enhancedOptions.systemPrompt,
+        strictJsonMode: Boolean(options.strictJsonMode),
+        toolName: this.inferToolNameFromStackTrace(),
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    const response = await this.callLLMWithMessages(apiKey, modelName, messages, enhancedOptions, effectiveCallback);
+
+    // Send completion event for callLLM invocations
+    if (effectiveCallback) {
+      effectiveCallback.onStreamChunk({
+        type: 'call_llm_completion',
+        method: 'callLLM',
+        toolName: this.inferToolNameFromStackTrace(),
+        success: true,
+        responseText: response.text,
+        parsedJson: response.parsedJson,
+        strictJsonMode: Boolean(options.strictJsonMode),
+        timestamp: new Date().toISOString(),
+      });
+    }
 
     // If strict JSON mode is enabled, return parsed JSON or throw error
     if (options.strictJsonMode) {
@@ -165,13 +242,49 @@ export class UnifiedLLMClient {
       // Fallback: try to parse the text response
       if (response.text) {
         try {
-          return JSON.parse(response.text);
+          const parsed = JSON.parse(response.text);
+          
+          // Update completion event with successful parsing
+          if (effectiveCallback) {
+            effectiveCallback.onStreamChunk({
+              type: 'call_llm_json_parsed',
+              method: 'callLLM',
+              toolName: this.inferToolNameFromStackTrace(),
+              parsedJson: parsed,
+              timestamp: new Date().toISOString(),
+            });
+          }
+          
+          return parsed;
         } catch (parseError) {
+          // Send error event
+          if (effectiveCallback) {
+            effectiveCallback.onStreamChunk({
+              type: 'call_llm_error',
+              method: 'callLLM',
+              toolName: this.inferToolNameFromStackTrace(),
+              error: parseError instanceof Error ? parseError.message : String(parseError),
+              responseText: response.text,
+              timestamp: new Date().toISOString(),
+            });
+          }
+          
           throw new Error(`Invalid JSON response from LLM: ${parseError instanceof Error ? parseError.message : String(parseError)}. Response: ${response.text}`);
         }
       }
       
-      throw new Error('No response from LLM for JSON parsing');
+      const error = 'No response from LLM for JSON parsing';
+      if (effectiveCallback) {
+        effectiveCallback.onStreamChunk({
+          type: 'call_llm_error',
+          method: 'callLLM',
+          toolName: this.inferToolNameFromStackTrace(),
+          error,
+          timestamp: new Date().toISOString(),
+        });
+      }
+      
+      throw new Error(error);
     }
 
     // Default behavior: return text

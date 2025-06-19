@@ -712,6 +712,127 @@ export class LangfuseTracingBackend implements TracingBackend {
         }
         break;
 
+      case 'call_llm_invocation':
+        // Handle direct callLLM method invocations (tools, simple prompts)
+        if (this.currentTrace) {
+          // Create a span for the callLLM invocation
+          const span = this.currentTrace.span({
+            name: `callLLM-${event.data?.toolName || 'unknown'}`,
+            startTime: eventTime,
+            metadata: {
+              method: event.data?.method,
+              modelName: event.data?.modelName,
+              toolName: event.data?.toolName,
+              strictJsonMode: event.data?.strictJsonMode,
+              userPromptLength: event.data?.userPrompt?.length,
+            },
+            input: {
+              userPrompt: event.data?.userPrompt,
+              systemPrompt: event.data?.systemPrompt,
+              modelName: event.data?.modelName,
+            },
+          });
+          
+          // Store the span for later completion
+          const spanKey = `callLLM-${event.data?.toolName || 'unknown'}-${eventTime.getTime()}`;
+          this.spans.set(spanKey, span);
+          
+          logger.info(`Started callLLM span for ${event.data?.toolName || 'unknown'} tool`);
+        } else {
+          // Create a new trace for standalone callLLM invocations
+          this.currentTrace = this.langfuse.trace({
+            name: `tool-execution-${event.data?.toolName || 'unknown'}`,
+            input: {
+              userPrompt: event.data?.userPrompt,
+              systemPrompt: event.data?.systemPrompt,
+              modelName: event.data?.modelName,
+              method: event.data?.method,
+            },
+            metadata: {
+              toolName: event.data?.toolName,
+              strictJsonMode: event.data?.strictJsonMode,
+              standalone: true,
+            },
+            timestamp: eventTime,
+          });
+          
+          logger.info(`Started new trace for standalone callLLM invocation: ${event.data?.toolName || 'unknown'}`);
+        }
+        break;
+
+      case 'call_llm_completion':
+      case 'call_llm_json_parsed':
+        // Handle callLLM completion events
+        if (this.currentTrace) {
+          // Find and close the corresponding span
+          const spanKey = `callLLM-${event.data?.toolName || 'unknown'}`;
+          for (const [key, span] of this.spans.entries()) {
+            if (key.startsWith(spanKey)) {
+              span.end({
+                endTime: eventTime,
+                output: {
+                  responseText: event.data?.responseText,
+                  parsedJson: event.data?.parsedJson,
+                  success: event.data?.success,
+                },
+                metadata: {
+                  strictJsonMode: event.data?.strictJsonMode,
+                  completionType: event.type,
+                },
+              });
+              this.spans.delete(key);
+              logger.info(`Completed callLLM span for ${event.data?.toolName || 'unknown'} tool`);
+              break;
+            }
+          }
+          
+          // Also update the trace if it's a standalone callLLM
+          if (event.data?.success && this.currentTrace) {
+            this.currentTrace.update({
+              endTime: eventTime,
+              output: {
+                responseText: event.data?.responseText,
+                parsedJson: event.data?.parsedJson,
+              },
+            });
+          }
+        }
+        break;
+
+      case 'call_llm_error':
+        // Handle callLLM error events
+        if (this.currentTrace) {
+          // Find and close the corresponding span with error
+          const spanKey = `callLLM-${event.data?.toolName || 'unknown'}`;
+          for (const [key, span] of this.spans.entries()) {
+            if (key.startsWith(spanKey)) {
+              span.end({
+                endTime: eventTime,
+                output: { 
+                  error: event.data?.error,
+                  responseText: event.data?.responseText,
+                },
+                metadata: {
+                  level: 'ERROR',
+                  statusMessage: event.data?.error,
+                },
+              });
+              this.spans.delete(key);
+              logger.info(`Completed callLLM span with error for ${event.data?.toolName || 'unknown'} tool`);
+              break;
+            }
+          }
+          
+          // Also add error event to trace
+          this.currentTrace.event({
+            name: 'callLLM-error',
+            level: 'ERROR',
+            metadata: event.data,
+            timestamp: eventTime,
+          });
+        }
+        break;
+
       default:
         // Handle other event types as generic events
         if (this.currentTrace) {
