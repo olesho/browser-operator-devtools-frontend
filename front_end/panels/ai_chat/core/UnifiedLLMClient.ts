@@ -301,6 +301,8 @@ export class UnifiedLLMClient {
     options: UnifiedLLMOptions,
     callback?: Callback,
   ): Promise<UnifiedLLMResponse> {
+    // Create default tracing callback if none provided and tracing is enabled
+    const effectiveCallback = callback || this.createDefaultTracingCallback();
 
     const modelType = this.getModelType(modelName);
 
@@ -315,8 +317,8 @@ export class UnifiedLLMClient {
     const openaiMessages = this.convertToOpenAIMessages(messages, options.systemPrompt);
 
     // Trace LLM call context before start - this provides all input data for tracing
-    if (callback?.onStreamChunk) {
-      callback.onStreamChunk({
+    if (effectiveCallback?.onStreamChunk) {
+      effectiveCallback.onStreamChunk({
         type: 'llm_call_context',
         messages,
         openaiMessages,
@@ -329,13 +331,13 @@ export class UnifiedLLMClient {
     }
 
     // Trace LLM call start
-    if (callback?.onStreamStart) {
-      callback.onStreamStart();
+    if (effectiveCallback?.onStreamStart) {
+      effectiveCallback.onStreamStart();
     }
 
     // Trace provider call
-    if (callback?.onStreamChunk) {
-      callback.onStreamChunk({
+    if (effectiveCallback?.onStreamChunk) {
+      effectiveCallback.onStreamChunk({
         type: 'provider_call',
         provider: modelType,
         modelName,
@@ -346,12 +348,25 @@ export class UnifiedLLMClient {
     logger.info(`Converted to OpenAI messages:\n${JSON.stringify(openaiMessages, null, 2)}`);
 
     try {
+      console.log('🔍 [UnifiedLLMClient] About to call provider method:', { 
+        modelType, 
+        hasCallback: Boolean(callback),
+        hasEffectiveCallback: Boolean(effectiveCallback),
+        callbackType: effectiveCallback?.constructor?.name
+      });
+      
       let response: any;
       if (modelType === 'litellm') {
         response = await this.callLiteLLMWithMessages(apiKey, modelName, openaiMessages, options);
       } else {
         response = await this.callOpenAIWithMessages(apiKey, modelName, openaiMessages, options);
       }
+
+      console.log('🔍 [UnifiedLLMClient] Provider method completed:', { 
+        hasResponse: Boolean(response),
+        hasText: Boolean(response?.text),
+        hasFunctionCall: Boolean(response?.functionCall)
+      });
 
       const result: UnifiedLLMResponse = {
         text: response.text,
@@ -360,9 +375,22 @@ export class UnifiedLLMClient {
         reasoning: response.reasoning || (response as any).reasoning,
       };
 
+      console.log('🔍 [UnifiedLLMClient] Created result object:', { 
+        hasResult: Boolean(result),
+        hasText: Boolean(result.text),
+        hasFunctionCall: Boolean(result.functionCall),
+        hasCallback: Boolean(callback),
+        hasEffectiveCallback: Boolean(effectiveCallback),
+        hasOnResponse: Boolean(effectiveCallback?.onResponse)
+      });
+
       // Trace LLM response
-      if (callback?.onResponse) {
-        callback.onResponse(result);
+      if (effectiveCallback?.onResponse) {
+        console.log('🔍 [UnifiedLLMClient] Calling effectiveCallback.onResponse with:', result);
+        effectiveCallback.onResponse(result);
+        console.log('🔍 [UnifiedLLMClient] effectiveCallback.onResponse completed');
+      } else {
+        console.log('🔍 [UnifiedLLMClient] No effectiveCallback.onResponse available');
       }
 
       // Handle strict JSON mode parsing
@@ -379,8 +407,12 @@ export class UnifiedLLMClient {
       }
 
       // Trace LLM finish
-      if (callback?.onFinish) {
-        callback.onFinish();
+      if (effectiveCallback?.onFinish) {
+        console.log('🔍 [UnifiedLLMClient] Calling effectiveCallback.onFinish');
+        effectiveCallback.onFinish();
+        console.log('🔍 [UnifiedLLMClient] effectiveCallback.onFinish completed');
+      } else {
+        console.log('🔍 [UnifiedLLMClient] No effectiveCallback.onFinish available');
       }
 
       return result;
@@ -393,8 +425,12 @@ export class UnifiedLLMClient {
       });
 
       // Trace LLM error
-      if (callback?.onError) {
-        callback.onError(error);
+      if (effectiveCallback?.onError) {
+        console.log('🔍 [UnifiedLLMClient] Calling effectiveCallback.onError with:', error);
+        effectiveCallback.onError(error);
+        console.log('🔍 [UnifiedLLMClient] effectiveCallback.onError completed');
+      } else {
+        console.log('🔍 [UnifiedLLMClient] No effectiveCallback.onError available');
       }
 
       throw error;

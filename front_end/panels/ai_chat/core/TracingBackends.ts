@@ -424,15 +424,39 @@ class SimpleLangfuse {
     
     logger.info(`[Langfuse] Flushing ${this.pendingEvents.length} events`);
     
+    // Debug log trace events specifically
+    const traceEvents = this.pendingEvents.filter(e => e.type === 'trace-update');
+    if (traceEvents.length > 0) {
+      console.log('🔍 [Langfuse] Trace updates being sent:', traceEvents.map(e => ({
+        type: e.type,
+        id: e.id,
+        hasOutput: Boolean(e.body?.output),
+        output: e.body?.output,
+        outputType: typeof e.body?.output,
+        outputPreview: typeof e.body?.output === 'string' ? e.body?.output.substring(0, 100) : e.body?.output,
+      })));
+    }
+    
     try {
       const payload = { batch: this.pendingEvents };
       const url = `${this.config.baseUrl || 'http://localhost:3000'}/api/public/ingestion`;
+      
+      // Debug authentication
+      const authString = `${this.config.publicKey}:${this.config.secretKey}`;
+      const authHeader = 'Basic ' + btoa(authString);
+      console.log('🔍 [Langfuse] Authentication debug:', {
+        publicKey: this.config.publicKey,
+        secretKeyPrefix: this.config.secretKey?.substring(0, 10) + '...',
+        authStringLength: authString.length,
+        authHeaderLength: authHeader.length,
+        url
+      });
       
       const response = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': 'Basic ' + btoa(`${this.config.publicKey}:${this.config.secretKey}`),
+          'Authorization': authHeader,
           'X-Langfuse-Sdk-Name': 'langfuse-js',
           'X-Langfuse-Sdk-Version': '3.0.0',
           'X-Langfuse-Sdk-Variant': 'devtools-ai-chat',
@@ -440,7 +464,7 @@ class SimpleLangfuse {
         },
         body: JSON.stringify(payload),
       });
-      
+
       if (response.ok) {
         logger.info(`[Langfuse] Successfully sent ${this.pendingEvents.length} events`);
         this.pendingEvents = [];
@@ -465,6 +489,7 @@ export class LangfuseTracingBackend implements TracingBackend {
   
   private langfuse: SimpleLangfuse | null = null;
   private currentTrace: any = null;
+  private currentTraceInput: any = null; // Store trace input for observations
   private spans: Map<string, any> = new Map();
   private flushTimer?: number;
   private initialized = false;
@@ -563,14 +588,16 @@ export class LangfuseTracingBackend implements TracingBackend {
     switch (event.type) {
       case 'llm_stream_start':
         // Start a new trace for each LLM interaction
+        const traceInput = {
+          messages: event.data?.messages,
+          systemPrompt: event.data?.systemPrompt,
+          modelName: event.data?.modelName,
+          tools: event.data?.tools,
+        };
+        
         this.currentTrace = this.langfuse.trace({
           name: 'ai-chat-conversation',
-          input: {
-            messages: event.data?.messages,
-            systemPrompt: event.data?.systemPrompt,
-            modelName: event.data?.modelName,
-            tools: event.data?.tools,
-          },
+          input: traceInput,
           userId: event.data?.userId,
           sessionId: event.data?.sessionId,
           metadata: {
@@ -583,15 +610,20 @@ export class LangfuseTracingBackend implements TracingBackend {
           },
           timestamp: eventTime,
         });
+        
+        // Store input for use in observations
+        this.currentTraceInput = traceInput;
+        
         logger.info(`Started new Langfuse trace with ${event.data?.messageCount || 0} messages`);
         break;
 
       case 'llm_response':
-        if (this.currentTrace) {
+        if (this.currentTrace && this.currentTraceInput) {
           const generation = this.currentTrace.generation({
             name: 'llm-response',
             model: event.data?.modelName || event.data?.model || 'unknown',
             startTime: eventTime,
+            input: this.currentTraceInput, // Add the stored input for this observation
             metadata: {
               hasText: event.data?.hasText,
               hasFunctionCall: event.data?.hasFunctionCall,
@@ -648,16 +680,168 @@ export class LangfuseTracingBackend implements TracingBackend {
       case 'llm_finish':
       case 'llm_stream_finish':
         if (this.currentTrace) {
-          this.currentTrace.update({
+          // Build comprehensive output from available response data
+          const output: any = {};
+          
+          if (event.data?.responseText) {
+            output.text = event.data.responseText;
+          }
+          
+          if (event.data?.accumulatedContent) {
+            output.streamedContent = event.data.accumulatedContent;
+          }
+          
+          if (event.data?.functionCall) {
+            output.functionCall = event.data.functionCall;
+          }
+          
+          if (event.data?.reasoning) {
+            output.reasoning = event.data.reasoning;
+          }
+          
+          if (event.data?.finalResponse) {
+            output.fullResponse = event.data.finalResponse;
+          }
+          
+          // Use the best available content as primary output
+          let primaryOutput = output.text || output.streamedContent || output.fullResponse?.text;
+          
+          // If no text content, use the structured output object
+          if (!primaryOutput) {
+            if (Object.keys(output).length > 0) {
+              primaryOutput = output;
+            } else {
+              // Fallback to any available content from event data
+              primaryOutput = event.data?.finalResponse?.text || 
+                             event.data?.responseText || 
+                             event.data?.accumulatedContent ||
+                             event.data?.finalResponse ||
+                             "No output captured";
+            }
+          }
+          
+          console.log('🔍 [Langfuse] Setting trace output:', {
+            primaryOutput: typeof primaryOutput === 'string' ? primaryOutput.substring(0, 100) + '...' : primaryOutput,
+            outputType: typeof primaryOutput,
+            outputKeys: typeof primaryOutput === 'object' ? Object.keys(primaryOutput) : 'N/A',
+            hasText: Boolean(output.text),
+            hasStreamedContent: Boolean(output.streamedContent),
+            hasFullResponse: Boolean(output.fullResponse),
+            eventDataKeys: Object.keys(event.data || {}),
+          });
+          
+          // Ensure we have a valid output before updating
+          if (primaryOutput === undefined || primaryOutput === null) {
+            logger.warn('[Langfuse] Warning: primaryOutput is null/undefined, using fallback');
+            primaryOutput = 'No response content captured';
+          }
+          
+          const updateData = {
             endTime: eventTime,
-            output: event.data?.result || event.data?.response || event.data?.content,
+            output: primaryOutput,
             metadata: { 
               duration: event.data?.duration,
               totalTokens: event.data?.totalTokens,
+              outputFields: Object.keys(output),
+              hasResponseText: Boolean(event.data?.responseText),
+              hasAccumulatedContent: Boolean(event.data?.accumulatedContent),
+              hasFunctionCall: Boolean(event.data?.functionCall),
+              hasReasoning: Boolean(event.data?.reasoning),
+              outputType: typeof primaryOutput,
+              outputLength: typeof primaryOutput === 'string' ? primaryOutput.length : 'N/A',
+              traceUpdateCalled: true,
               ...event.data,
             },
+          };
+          
+          console.log('🔍 [Langfuse] Calling trace.update() with:', {
+            hasOutput: Boolean(updateData.output),
+            outputType: typeof updateData.output,
+            outputSample: typeof updateData.output === 'string' ? updateData.output.substring(0, 50) : updateData.output,
           });
-          logger.info('Finished Langfuse trace with duration:', event.data?.duration);
+          
+          this.currentTrace.update(updateData);
+          logger.info(`Finished Langfuse trace with duration: ${event.data?.duration}ms, output type: ${typeof primaryOutput}`);
+          
+          // Clear trace and input data after completion
+          this.currentTrace = null;
+          this.currentTraceInput = null;
+        }
+        break;
+
+      case 'call_llm_invocation':
+        if (this.currentTrace) {
+          // Create a span for the callLLM invocation
+          const span = this.currentTrace.span({
+            name: `call-llm-${event.data?.toolName || event.data?.method || 'unknown'}`,
+            startTime: eventTime,
+            input: {
+              userPrompt: event.data?.userPrompt,
+              systemPrompt: event.data?.systemPrompt,
+              modelName: event.data?.modelName,
+              toolName: event.data?.toolName,
+              method: event.data?.method,
+              strictJsonMode: event.data?.strictJsonMode,
+            },
+            metadata: {
+              toolName: event.data?.toolName,
+              method: event.data?.method,
+              strictJsonMode: event.data?.strictJsonMode,
+              timestamp: event.data?.timestamp,
+            },
+          });
+          // Store the span for completion
+          this.spans.set(`callLLM-${event.data?.toolName || 'default'}`, span);
+        }
+        break;
+
+      case 'call_llm_completion':
+      case 'call_llm_json_parsed':
+        if (this.currentTrace) {
+          const spanKey = `callLLM-${event.data?.toolName || 'default'}`;
+          const span = this.spans.get(spanKey);
+          if (span) {
+            span.end({
+              endTime: eventTime,
+              output: {
+                success: event.data?.success,
+                responseText: event.data?.responseText,
+                parsedJson: event.data?.parsedJson,
+                method: event.data?.method,
+                toolName: event.data?.toolName,
+              },
+              metadata: {
+                success: event.data?.success,
+                strictJsonMode: event.data?.strictJsonMode,
+                timestamp: event.data?.timestamp,
+              },
+            });
+            this.spans.delete(spanKey);
+          }
+        }
+        break;
+
+      case 'call_llm_error':
+        if (this.currentTrace) {
+          const spanKey = `callLLM-${event.data?.toolName || 'default'}`;
+          const span = this.spans.get(spanKey);
+          if (span) {
+            span.end({
+              endTime: eventTime,
+              output: {
+                error: event.data?.error,
+                responseText: event.data?.responseText,
+                method: event.data?.method,
+                toolName: event.data?.toolName,
+              },
+              metadata: {
+                error: event.data?.error,
+                timestamp: event.data?.timestamp,
+                level: 'ERROR',
+              },
+            });
+            this.spans.delete(spanKey);
+          }
         }
         break;
 
@@ -666,20 +850,39 @@ export class LangfuseTracingBackend implements TracingBackend {
           const span = this.currentTrace.span({
             name: event.data?.toolName || 'tool-execution',
             startTime: eventTime,
-            metadata: event.data,
+            input: {
+              toolName: event.data?.toolName,
+              toolArgs: event.data?.toolArgs,
+              agentName: event.data?.agentName,
+            },
+            metadata: {
+              toolName: event.data?.toolName,
+              agentName: event.data?.agentName,
+              ...event.data,
+            },
           });
           this.spans.set(event.data?.toolName || 'default', span);
         }
         break;
 
+      case 'tool_execution_success':
       case 'tool_execution_end':
         const toolName = event.data?.toolName || 'default';
         const span = this.spans.get(toolName);
         if (span) {
           span.end({
             endTime: eventTime,
-            output: event.data?.result,
-            metadata: event.data,
+            output: {
+              resultText: event.data?.resultText,
+              result: event.data?.result,
+              isError: event.data?.isError || false,
+              success: !event.data?.isError,
+            },
+            metadata: {
+              toolName: event.data?.toolName,
+              isError: event.data?.isError || false,
+              ...event.data,
+            },
           });
           this.spans.delete(toolName);
         }
@@ -691,11 +894,18 @@ export class LangfuseTracingBackend implements TracingBackend {
         if (errorSpan) {
           errorSpan.end({
             endTime: eventTime,
-            output: { error: event.data?.message },
-            metadata: { 
-              ...event.data,
+            output: {
+              error: event.data?.error,
+              toolName: event.data?.toolName,
+              isError: true,
+              success: false,
+            },
+            metadata: {
+              toolName: event.data?.toolName,
+              error: event.data?.error,
               level: 'ERROR',
-              statusMessage: event.data?.message,
+              isError: true,
+              ...event.data,
             },
           });
           this.spans.delete(errorToolName);
@@ -1023,8 +1233,8 @@ export class TracingBackendConfigHelper {
     const configs: TracingBackendConfig[] = [];
     
     // Always add HTTP backend with default URL
-    const httpUrl = localStorage.getItem('ai_chat_tracing_http_url') || 'http://localhost:8888/api/v1/traces';
-    configs.push(TracingBackendConfigHelper.createHTTPConfig(httpUrl));
+    // const httpUrl = localStorage.getItem('ai_chat_tracing_http_url') || 'http://localhost:8888/api/v1/traces';
+    // configs.push(TracingBackendConfigHelper.createHTTPConfig(httpUrl));
     
     // Check for console backend
     const enableConsole = localStorage.getItem('ai_chat_enable_tracing') === 'true';
@@ -1042,19 +1252,19 @@ localStorage.setItem('ai_chat_enable_tracing', 'true');
 // Example backend configurations:
 
 // HTTP backend configuration
-const httpBackendConfig = {
-  type: 'http',
-  enabled: true,
-  url: 'http://localhost:8888/api/v1/traces',
-  method: 'POST',
-  batchSize: 20,
-  flushInterval: 3000,
-  timeout: 5000,
-  headers: {
-    'Content-Type': 'application/json',
-    'X-Source': 'devtools-ai-chat'
-  }
-};
+// const httpBackendConfig = {
+//   type: 'http',
+//   enabled: true,
+//   url: 'http://localhost:8888/api/v1/traces',
+//   method: 'POST',
+//   batchSize: 20,
+//   flushInterval: 3000,
+//   timeout: 5000,
+//   headers: {
+//     'Content-Type': 'application/json',
+//     'X-Source': 'devtools-ai-chat'
+//   }
+// };
 
 // Langfuse backend configuration
 const langfuseBackendConfig = {
@@ -1068,6 +1278,8 @@ const langfuseBackendConfig = {
 };
 
 // Set up multiple backends
-const backendConfigs = [httpBackendConfig, langfuseBackendConfig];
+const backendConfigs = [
+  // httpBackendConfig, 
+  langfuseBackendConfig];
 
 localStorage.setItem('ai_chat_tracing_backends', JSON.stringify(backendConfigs)); 

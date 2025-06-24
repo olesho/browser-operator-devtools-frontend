@@ -48,6 +48,8 @@ export class TracingCallback implements Callback {
   private options: TracingOptions;
   private backends: TracingBackend[] = [];
   private currentLLMContext?: LLMCallContext; // Store the current LLM call context
+  private accumulatedResponse: string = ''; // Store accumulated response content
+  private finalResponse?: any; // Store final response object
 
   constructor(options: TracingOptions = {}) {
     this.options = {
@@ -128,6 +130,18 @@ export class TracingCallback implements Callback {
   }
 
   onResponse(response: any): void {
+    // Store the final response for trace completion
+    this.finalResponse = response;
+    
+    // Debug log to verify we're capturing response content
+    console.log('🔍 [TracingCallback] onResponse called with:', {
+      hasText: Boolean(response?.text),
+      hasFunction: Boolean(response?.functionCall),
+      hasReasoning: Boolean(response?.reasoning),
+      textLength: response?.text?.length || 0,
+      textPreview: response?.text?.substring(0, 100) || 'No text',
+    });
+    
     this.addEvent('llm_response', {
       // Include actual content for Langfuse tracing
       text: response.text,
@@ -151,10 +165,31 @@ export class TracingCallback implements Callback {
 
   onFinish(): void {
     const duration = this.startTime ? Date.now() - this.startTime : 0;
+    
+    // Debug log to verify we have response content to send
+    console.log('🔍 [TracingCallback] onFinish called with:', {
+      duration,
+      hasFinalResponse: Boolean(this.finalResponse),
+      hasResponseText: Boolean(this.finalResponse?.text),
+      hasAccumulatedContent: Boolean(this.accumulatedResponse),
+      accumulatedLength: this.accumulatedResponse?.length || 0,
+      responseTextLength: this.finalResponse?.text?.length || 0,
+    });
+    
     this.addEvent('llm_finish', {
       duration,
+      // Include final response content for trace output
+      finalResponse: this.finalResponse,
+      responseText: this.finalResponse?.text,
+      functionCall: this.finalResponse?.functionCall,
+      reasoning: this.finalResponse?.reasoning,
+      accumulatedContent: this.accumulatedResponse,
     });
+    
+    // Reset for next conversation
     this.startTime = undefined;
+    this.finalResponse = undefined;
+    this.accumulatedResponse = '';
   }
 
   onStream(response: any): void {
@@ -168,7 +203,14 @@ export class TracingCallback implements Callback {
   }
 
   onStreamFinish(): void {
-    this.addEvent('llm_stream_finish', {});
+    this.addEvent('llm_stream_finish', {
+      // Include final response content for trace output
+      finalResponse: this.finalResponse,
+      responseText: this.finalResponse?.text,
+      functionCall: this.finalResponse?.functionCall,
+      reasoning: this.finalResponse?.reasoning,
+      accumulatedContent: this.accumulatedResponse,
+    });
   }
 
   onStreamStart(): void {
@@ -221,6 +263,14 @@ export class TracingCallback implements Callback {
     if (chunk.type === 'call_llm_completion' || chunk.type === 'call_llm_json_parsed' || chunk.type === 'call_llm_error') {
       this.addEvent(chunk.type, chunk);
       return;
+    }
+    
+    // Accumulate response content from stream chunks
+    if (chunk && typeof chunk === 'object') {
+      const content = chunk.content || chunk.text || chunk.delta?.content;
+      if (content && typeof content === 'string') {
+        this.accumulatedResponse += content;
+      }
     }
     
     this.addEvent('llm_stream_chunk', chunk);
