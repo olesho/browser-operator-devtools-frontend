@@ -56,7 +56,9 @@ export class GenericToolEvaluator {
             await this.hooks.beforeNavigation(testCase);
           }
           
+          console.log(`[TOOL EXECUTION PATH 5] GenericToolEvaluator about to navigate: ${testCase.url}`);
           const navResult = await this.navigateTool.execute({ url: testCase.url, reasoning: `Navigate to ${testCase.url} for test case ${testCase.name}` });
+          console.log(`[TOOL EXECUTION PATH 5] GenericToolEvaluator completed navigation: ${testCase.url}`);
           if ('error' in navResult) {
             throw new Error(`Navigation failed: ${navResult.error}`);
           }
@@ -71,8 +73,12 @@ export class GenericToolEvaluator {
         }
 
         // 2. Execute the tool with the input - wrapped with error handling
+        console.log(`[TOOL EXECUTION PATH 5] GenericToolEvaluator about to execute tool: ${testCase.tool}`);
         const toolResult = await ErrorHandlingUtils.withErrorHandling(
-          async () => await tool.execute(testCase.input),
+          async () => {
+            console.log(`[TOOL EXECUTION PATH 5] GenericToolEvaluator inside execute for: ${testCase.tool}`);
+            return await tool.execute(testCase.input);
+          },
           (error) => ({ error: ErrorHandlingUtils.formatUserFriendlyError(error, 'Tool execution failed') }),
           logger,
           `GenericToolEvaluator.toolExecution:${testCase.tool}`

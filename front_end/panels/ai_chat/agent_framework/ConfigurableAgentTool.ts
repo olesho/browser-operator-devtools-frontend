@@ -337,6 +337,9 @@ export class ConfigurableAgentTool implements Tool<ConfigurableAgentArgs, Config
    * Execute the agent
    */
   async execute(args: ConfigurableAgentArgs): Promise<ConfigurableAgentResult> {
+    console.log(`[CONFIGURABLE AGENT DEBUG] Executing ${this.name} via AgentRunner with args:`, args);
+    console.error(`[CRITICAL DEBUG - CONFIGURABLE AGENT] EXECUTING AGENT: ${this.name} - THIS SHOULD ALWAYS APPEAR!!!`);
+    console.warn(`[URGENT - ConfigurableAgentTool] Agent ${this.name} execute() method called!`);
     logger.info('Executing ${this.name} via AgentRunner with args:', args);
 
     const agentService = AgentService.getInstance();
