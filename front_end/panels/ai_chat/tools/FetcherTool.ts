@@ -149,12 +149,10 @@ export class FetcherTool implements Tool<FetcherToolArgs, FetcherToolResult> {
       // Step 1: Navigate to the URL
       logger.info('Navigating to URL', { url });
       // Note: NavigateURLTool requires both url and reasoning parameters
-      console.log(`[TOOL EXECUTION PATH 3] FetcherTool about to execute NavigateURLTool: ${url}`);
       const navigationResult = await this.navigateURLTool.execute({
         url,
         reasoning: `Navigating to ${url} to extract content for research`
       } as { url: string, reasoning: string });
-      console.log(`[TOOL EXECUTION PATH 3] FetcherTool completed NavigateURLTool: ${url}`);
 
       // Check for navigation errors
       if ('error' in navigationResult) {

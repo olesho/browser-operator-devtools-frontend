@@ -123,10 +123,8 @@ export class CombinedExtractionTool implements Tool<CombinedExtractionArgs, Comb
     try {
       // STEP 1: Navigate to the URL using NavigateURLTool
       logger.info('Navigating to URL', { url });
-      console.log(`[TOOL EXECUTION PATH 4] CombinedExtractionTool about to execute NavigateURLTool: ${url}`);
       const navigateUrlTool = new NavigateURLTool();
       const navigationResult = await navigateUrlTool.execute({ url, reasoning });
-      console.log(`[TOOL EXECUTION PATH 4] CombinedExtractionTool completed NavigateURLTool: ${url}`);
 
       // Check if we got an error result
       if ('error' in navigationResult) {

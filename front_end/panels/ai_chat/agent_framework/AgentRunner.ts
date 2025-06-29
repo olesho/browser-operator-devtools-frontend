@@ -455,10 +455,8 @@ export class AgentRunner {
           } else {
             // *** Regular tool execution ***
              try {
-              console.log(`[TOOL EXECUTION PATH 2] AgentRunner about to execute tool: ${toolToExecute.name}`);
               logger.info('${agentName} Executing tool: ${toolToExecute.name} with args:', toolArgs);
               toolResultData = await toolToExecute.execute(toolArgs as any);
-              console.log(`[TOOL EXECUTION PATH 2] AgentRunner completed tool: ${toolToExecute.name}`);
               toolResultText = typeof toolResultData === 'string' ? toolResultData : JSON.stringify(toolResultData, null, 2);
 
               // Check if the result object indicates an error explicitly

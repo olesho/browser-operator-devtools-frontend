@@ -79,11 +79,9 @@ export class SchemaBasedExtractorTool implements Tool<SchemaExtractionArgs, Sche
    * Helper function to create tracing observation for tool execution
    */
   private async createToolTracingObservation(toolName: string, args: any): Promise<void> {
-    console.error(`[CRITICAL TRACING DEBUG] createToolTracingObservation called for ${toolName}`);
     try {
       const { getCurrentTracingContext, createTracingProvider } = await import('../tracing/TracingConfig.js');
       const context = getCurrentTracingContext();
-      console.error(`[CRITICAL TRACING DEBUG] getCurrentTracingContext returned:`, context);
       if (context) {
         const tracingProvider = createTracingProvider();
         await tracingProvider.createObservation({
@@ -110,8 +108,6 @@ export class SchemaBasedExtractorTool implements Tool<SchemaExtractionArgs, Sche
 
   async execute(args: SchemaExtractionArgs): Promise<SchemaExtractionResult> {
     logger.debug('Executing with args', args);
-    console.error(`[CRITICAL DEBUG - SCHEMA EXTRACTOR] EXECUTING extract_schema_data TOOL - THIS SHOULD ALWAYS APPEAR!!!`);
-    console.warn(`[URGENT - SchemaBasedExtractorTool] Tool ${this.name} execute() method called!`);
     
     // Add tracing observation
     await this.createToolTracingObservation(this.name, args);

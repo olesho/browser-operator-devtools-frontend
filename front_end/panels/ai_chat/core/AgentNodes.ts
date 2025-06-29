@@ -349,7 +349,6 @@ export function createToolExecutorNode(state: AgentState): Runnable<AgentState, 
     }
 
     async invoke(state: AgentState): Promise<AgentState> {
-      console.log('[TOOL EXECUTOR DEBUG] ToolExecutorNode invoke called');
       const lastMessage = state.messages[state.messages.length - 1];
 
       // Expect the last message to be the MODEL action requesting the tool

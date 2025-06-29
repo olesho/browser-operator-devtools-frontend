@@ -612,13 +612,10 @@ export class NavigateURLTool implements Tool<{ url: string, reasoning: string },
   description = 'Navigates the page to a specified URL and waits for it to load';
 
   constructor() {
-    console.log('[TOOL EXECUTION PATH 6] NavigateURLTool constructor called - NEW INSTANCE CREATED');
   }
 
   async execute(args: { url: string, reasoning: string /* Add reasoning to signature */ }): Promise<NavigationResult | ErrorResult> {
-    console.log('[TOOL EXECUTION PATH 6] NavigateURLTool.execute called with URL:', args.url);
     await createToolTracingObservation(this.name, args);
-    console.warn('[NAVIGATE URL TOOL DEBUG] NavigateURLTool.execute called with:', args);
     logger.info('navigate_url', args);
     const url = args.url;
     const LOAD_TIMEOUT_MS = 30000; // 30 seconds timeout for page load

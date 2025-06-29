@@ -49,8 +49,6 @@ export class AgentService extends Common.ObjectWrapper.ObjectWrapper<{
   constructor() {
     super();
     
-    console.error('[AGENT SERVICE CONSTRUCTOR] AgentService constructor called - this should ALWAYS appear');
-
     // Initialize tracing
     this.#sessionId = this.generateSessionId();
     this.#initializeTracing();

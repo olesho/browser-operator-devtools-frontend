@@ -34,8 +34,8 @@ export class LangfuseProvider extends TracingProvider {
   private secretKey: string;
   private eventBuffer: LangfuseEvent[] = [];
   private flushTimer?: number;
-  private readonly batchSize = 5; // Reduced for debugging
-  private readonly flushInterval = 2000; // 2 seconds for debugging
+  private readonly batchSize = 5;
+  private readonly flushInterval = 1000; // 5 seconds
 
   constructor(endpoint: string, publicKey: string, secretKey: string, enabled: boolean = true) {
     super(enabled);
@@ -97,9 +97,7 @@ export class LangfuseProvider extends TracingProvider {
     observation: ObservationData,
     traceId: string
   ): Promise<void> {
-    console.error(`[CRITICAL LANGFUSE DEBUG] createObservation called - enabled: ${this.enabled}, traceId: ${traceId}`);
     if (!this.enabled) {
-      console.error(`[CRITICAL LANGFUSE DEBUG] Provider disabled, returning early`);
       return;
     }
 
@@ -166,9 +164,7 @@ export class LangfuseProvider extends TracingProvider {
       metadata: observation.metadata
     };
 
-    console.error(`[CRITICAL LANGFUSE DEBUG] About to call addEvent with observation event:`, JSON.stringify(event, null, 2));
     this.addEvent(event);
-    console.error(`[CRITICAL LANGFUSE DEBUG] addEvent called successfully, event added to buffer`);
   }
 
   async updateObservation(
@@ -209,29 +205,15 @@ export class LangfuseProvider extends TracingProvider {
   }
 
   async flush(): Promise<void> {
-    console.error(`[CRITICAL FLUSH DEBUG] flush() called - enabled: ${this.enabled}, buffer length: ${this.eventBuffer.length}`);
-    
-    if (!this.enabled) {
-      console.error(`[CRITICAL FLUSH DEBUG] Provider disabled, returning early`);
-      return;
-    }
-    
-    if (this.eventBuffer.length === 0) {
-      console.error(`[CRITICAL FLUSH DEBUG] Buffer empty, nothing to flush`);
-      return;
-    }
+    if (!this.enabled || this.eventBuffer.length === 0) return;
 
     const events = [...this.eventBuffer];
     this.eventBuffer = [];
-    
-    console.error(`[CRITICAL FLUSH DEBUG] About to send batch with ${events.length} events`);
 
     try {
       await this.sendBatch(events);
-      console.error(`[CRITICAL FLUSH DEBUG] Successfully flushed ${events.length} events to Langfuse`);
       logger.debug(`Flushed ${events.length} events to Langfuse`);
     } catch (error) {
-      console.error(`[CRITICAL FLUSH DEBUG] Failed to flush events:`, error);
       logger.error('Failed to flush events to Langfuse', error);
       // Re-add events to buffer on failure
       this.eventBuffer.unshift(...events);
@@ -247,9 +229,6 @@ export class LangfuseProvider extends TracingProvider {
       }
     };
 
-    console.error(`[CRITICAL SEND DEBUG] Sending batch to ${this.endpoint}/api/public/ingestion with ${events.length} events`);
-    console.error(`[CRITICAL SEND DEBUG] Batch payload:`, JSON.stringify(batch, null, 2));
-
     const response = await fetch(`${this.endpoint}/api/public/ingestion`, {
       method: 'POST',
       headers: {
@@ -259,21 +238,13 @@ export class LangfuseProvider extends TracingProvider {
       body: JSON.stringify(batch)
     });
 
-    console.error(`[CRITICAL SEND DEBUG] Response status: ${response.status} ${response.statusText}`);
-
     if (!response.ok) {
       const errorText = await response.text();
-      console.error(`[CRITICAL SEND DEBUG] Error response body:`, errorText);
       throw new Error(`Langfuse ingestion failed: ${response.status} ${errorText}`);
-    } else {
-      const responseText = await response.text();
-      console.error(`[CRITICAL SEND DEBUG] Success response body:`, responseText);
     }
   }
 
   private addEvent(event: LangfuseEvent): void {
-    console.error(`[CRITICAL BUFFER DEBUG] Adding event to buffer - type: ${event.type}, current buffer size: ${this.eventBuffer.length}`);
-    
     logger.debug('Adding event to buffer', { 
       eventType: event.type, 
       eventId: event.id,
@@ -281,26 +252,18 @@ export class LangfuseProvider extends TracingProvider {
     });
     
     this.eventBuffer.push(event);
-    console.error(`[CRITICAL BUFFER DEBUG] Event added, new buffer size: ${this.eventBuffer.length}, batch size limit: ${this.batchSize}`);
 
     if (this.eventBuffer.length >= this.batchSize) {
-      console.error(`[CRITICAL BUFFER DEBUG] Buffer full (${this.eventBuffer.length}/${this.batchSize}), triggering auto-flush`);
       logger.debug('Buffer full, triggering auto-flush');
       this.flush().catch(error => {
-        console.error(`[CRITICAL BUFFER DEBUG] Auto-flush failed:`, error);
         logger.error('Auto-flush failed', error);
       });
-    } else {
-      console.error(`[CRITICAL BUFFER DEBUG] Buffer not full yet (${this.eventBuffer.length}/${this.batchSize}), waiting for more events or timer`);
     }
   }
 
   private startAutoFlush(): void {
-    console.error(`[CRITICAL TIMER DEBUG] Starting auto-flush timer with interval: ${this.flushInterval}ms`);
     this.flushTimer = window.setInterval(() => {
-      console.error(`[CRITICAL TIMER DEBUG] Auto-flush timer triggered, buffer size: ${this.eventBuffer.length}`);
       this.flush().catch(error => {
-        console.error(`[CRITICAL TIMER DEBUG] Periodic flush failed:`, error);
         logger.error('Periodic flush failed', error);
       });
     }, this.flushInterval);
