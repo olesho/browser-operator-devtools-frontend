@@ -1147,7 +1147,7 @@ export class SettingsDialog {
     contentDiv.appendChild(tracingSection);
 
     const tracingSectionTitle = document.createElement('h3');
-    tracingSectionTitle.className = 'settings-section-title';
+    tracingSectionTitle.className = 'settings-subtitle';
     tracingSectionTitle.textContent = i18nString(UIStrings.tracingSection);
     tracingSection.appendChild(tracingSectionTitle);
 
@@ -1661,9 +1661,9 @@ export class SettingsDialog {
       
       /* Tracing section styles */
       .tracing-section {
-        border-top: 1px solid var(--color-details-hairline);
-        padding-top: 24px;
-        margin-top: 24px;
+        margin-top: 16px;
+        padding: 16px 20px;
+        border-bottom: 1px solid var(--color-details-hairline);
       }
       
       .settings-section-title {
