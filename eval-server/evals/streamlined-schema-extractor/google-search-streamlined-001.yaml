@@ -1,0 +1,75 @@
+# Google Search results extraction test (Streamlined)
+id: "google-search-streamlined-001"
+name: "Extract Google Search Results (Streamlined)"
+description: "Extract search results from Google search page using streamlined extractor"
+enabled: true
+
+target:
+  url: "https://www.google.com/search?q=chrome+devtools+tutorial"
+
+tool: "extract_schema_streamlined"
+timeout: 45000
+
+input:
+  schema:
+    type: "object"
+    properties:
+      query:
+        type: "string"
+      searchResults:
+        type: "array"
+        items:
+          type: "object"
+          properties:
+            title:
+              type: "string"
+            url:
+              type: "string"
+              format: "url"
+            snippet:
+              type: "string"
+            domain:
+              type: "string"
+          required:
+            - "title"
+            - "url"
+            - "snippet"
+      featuredSnippet:
+        type: "object"
+        properties:
+          content:
+            type: "string"
+          source:
+            type: "string"
+          url:
+            type: "string"
+            format: "url"
+      relatedSearches:
+        type: "array"
+        items:
+          type: "string"
+    required:
+      - "searchResults"
+  instruction: "Extract the top 10 search results with titles, URLs, and snippets. Also extract featured snippet if present and related searches"
+  reasoning: "Testing extraction from Google search results page with various result types"
+
+schedule:
+  type: "on_demand"
+
+validation:
+  type: "llm-judge"
+  llm_judge:
+    model: "gpt-4.1-mini"
+    criteria:
+      - "Search results are relevant to the query"
+      - "Each result has a valid title, URL, and snippet"
+      - "URLs are properly resolved and not node IDs"
+      - "Related searches are extracted if present"
+      - "Featured snippet is captured when available"
+
+metadata:
+  tags: ["search", "google", "serp", "dynamic", "streamlined"]
+  priority: "high"
+  timeout: 45000
+  retries: 2
+  flaky: true

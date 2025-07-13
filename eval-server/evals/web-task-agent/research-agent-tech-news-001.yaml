@@ -1,0 +1,43 @@
+# Research agent evaluation
+id: "research-agent-tech-news-001"
+name: "Research Latest Technology News"
+description: "Test research agent capability to gather current tech news"
+enabled: true
+
+target:
+  url: "https://news.ycombinator.com"
+
+tool: "research_agent"
+timeout: 60000
+
+input:
+  query: "What are the top 3 technology stories trending today?"
+  max_iterations: 5
+  include_sources: true
+  depth: "moderate"
+
+schedule:
+  type: "on_demand"
+
+validation:
+  type: "llm-judge"
+  llm_judge:
+    model: "gpt-4o"
+    temperature: 0.3
+    criteria:
+      - "Response includes exactly 3 distinct technology stories"
+      - "Each story has a clear and informative summary"
+      - "Sources are provided for each story with valid URLs"
+      - "Information appears to be current and relevant"
+      - "Stories are ranked by relevance or popularity"
+    visual_verification:
+      enabled: true
+      capture_before: true
+      capture_after: true
+      prompts:
+        - "Verify that the page shows current news stories"
+        - "Check that the extracted stories match what's visible"
+
+metadata:
+  tags: ["research", "news", "tech", "current-events"]
+  priority: "normal"

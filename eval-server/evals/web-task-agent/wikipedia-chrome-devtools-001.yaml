@@ -1,0 +1,79 @@
+# Schema extraction from Wikipedia
+id: "wikipedia-chrome-devtools-001"
+name: "Extract Chrome DevTools Wikipedia Article"
+description: "Extract structured information from the Chrome DevTools Wikipedia page"
+enabled: true
+
+target:
+  url: "https://en.wikipedia.org/wiki/Chrome_DevTools"
+  wait_for: "networkidle"
+  wait_timeout: 5000
+
+tool: "extract_schema_data"
+timeout: 45000
+
+input:
+  schema:
+    type: "object"
+    properties:
+      title:
+        type: "string"
+      summary:
+        type: "string"
+      tableOfContents:
+        type: "array"
+        items:
+          type: "string"
+      infobox:
+        type: "object"
+        properties:
+          developer:
+            type: "string"
+          initialRelease:
+            type: "string"
+          operatingSystem:
+            type: "string"
+          license:
+            type: "string"
+      externalLinks:
+        type: "array"
+        items:
+          type: "object"
+          properties:
+            text:
+              type: "string"
+            url:
+              type: "string"
+              format: "url"
+    required:
+      - "title"
+      - "summary"
+  instruction: "Extract the main article information including title, summary, table of contents, and infobox details"
+  reasoning: "Testing extraction from a stable, well-structured Wikipedia page"
+
+schedule:
+  type: "on_demand"
+
+validation:
+  type: "hybrid"
+  llm_judge:
+    model: "gpt-4o-mini"
+    temperature: 0.3
+    criteria:
+      - "Article title matches the Wikipedia page title"
+      - "Summary captures the main description of Chrome DevTools"
+      - "Table of contents includes major sections"
+      - "Infobox contains key technical details"
+      - "External links are properly resolved URLs"
+  snapshot:
+    exclude_paths:
+      - "externalLinks[*].url"
+    structure_only: false
+  hybrid:
+    weight_llm: 0.7
+    weight_snapshot: 0.3
+
+metadata:
+  tags: ["wikipedia", "documentation", "stable", "schema-extraction"]
+  priority: "high"
+  owner: "devtools-team"

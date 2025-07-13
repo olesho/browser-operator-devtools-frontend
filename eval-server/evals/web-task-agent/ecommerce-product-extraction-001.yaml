@@ -1,0 +1,63 @@
+# E-commerce product extraction
+id: "ecommerce-product-extraction-001"
+name: "Extract Product Information from E-commerce Page"
+description: "Test schema extraction on a typical e-commerce product page"
+enabled: true
+
+target:
+  url: "https://example-ecommerce.com/product/laptop"
+  wait_for: "networkidle"
+
+tool: "extract_schema_streamlined"
+timeout: 30000
+
+input:
+  schema:
+    type: "object"
+    properties:
+      productName:
+        type: "string"
+      price:
+        type: "number"
+      currency:
+        type: "string"
+      availability:
+        type: "string"
+      description:
+        type: "string"
+      specifications:
+        type: "object"
+      images:
+        type: "array"
+        items:
+          type: "string"
+          format: "url"
+      reviews:
+        type: "object"
+        properties:
+          averageRating:
+            type: "number"
+          totalReviews:
+            type: "integer"
+    required:
+      - "productName"
+      - "price"
+
+schedule:
+  type: "periodic"
+  interval: 86400000  # Daily
+
+validation:
+  type: "llm-judge"
+  llm_judge:
+    model: "gpt-4o-mini"
+    criteria:
+      - "Product name is correctly extracted"
+      - "Price is numeric and reasonable"
+      - "Currency is identified if present"
+      - "Product description is meaningful"
+      - "At least some specifications are captured"
+
+metadata:
+  tags: ["ecommerce", "product", "daily-check"]
+  priority: "normal"
