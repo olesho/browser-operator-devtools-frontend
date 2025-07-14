@@ -13,6 +13,7 @@ import {
   StatusMessage,
   WelcomeMessage,
   RegistrationAckMessage,
+  AuthVerifyMessage,
   EvaluationRequest,
   EvaluationSuccessResponse,
   EvaluationErrorResponse,
@@ -23,6 +24,7 @@ import {
   isPongMessage,
   createRegisterMessage,
   createReadyMessage,
+  createAuthVerifyMessage,
   createStatusMessage,
   createSuccessResponse,
   createErrorResponse
@@ -45,6 +47,9 @@ export class EvaluationAgent {
   private ready = false;
   private activeEvaluations = new Map<string, any>();
   private heartbeatInterval: number | null = null;
+  private authPromise: Promise<void> | null = null;
+  private authResolve: ((value?: void) => void) | null = null;
+  private authReject: ((reason?: any) => void) | null = null;
 
   constructor(options: EvaluationAgentOptions) {
     this.clientId = options.clientId;
@@ -53,14 +58,20 @@ export class EvaluationAgent {
   }
 
   public async connect(): Promise<void> {
-    if (this.client && this.client.isConnectionReady()) {
-      logger.warn('Already connected');
+    if (this.client && this.client.isConnectionReady() && this.registered) {
+      logger.warn('Already connected and authenticated');
       return;
     }
 
     logger.info('Connecting to evaluation server', {
       endpoint: this.endpoint,
       clientId: this.clientId
+    });
+
+    // Create authentication promise
+    this.authPromise = new Promise((resolve, reject) => {
+      this.authResolve = resolve;
+      this.authReject = reject;
     });
 
     this.client = new WebSocketRPCClient({
@@ -75,6 +86,9 @@ export class EvaluationAgent {
 
     // Connect to server
     await this.client.connect();
+    
+    // Wait for authentication to complete
+    await this.authPromise;
   }
 
   public disconnect(): void {
@@ -96,7 +110,7 @@ export class EvaluationAgent {
   }
 
   public isConnected(): boolean {
-    return this.client?.isConnectionReady() || false;
+    return (this.client?.isConnectionReady() && this.registered) || false;
   }
 
   public isRegistered(): boolean {
@@ -167,8 +181,8 @@ export class EvaluationAgent {
         tools,
         maxConcurrency: 3,
         version: '1.0.0'
-      },
-      this.secretKey
+      }
+      // Note: No secret key sent - server will send its key for client verification
     );
 
     logger.info('Registering with server', {
@@ -187,11 +201,77 @@ export class EvaluationAgent {
       this.registered = true;
       this.sendReady();
       this.startHeartbeat();
+      
+      // Resolve auth promise - connection is complete
+      if (this.authResolve) {
+        this.authResolve();
+        this.authResolve = null;
+        this.authReject = null;
+      }
+    } else if (message.status === 'auth_required') {
+      logger.info('Server requesting authentication verification');
+      this.handleAuthRequest(message);
     } else {
-      logger.error('Registration rejected', {
-        reason: message.reason
-      });
+      if (message.newClient) {
+        logger.info('New client created, will retry connection', {
+          reason: message.reason
+        });
+        // For new clients, the server created the config and asks to reconnect
+        // We can attempt to reconnect after a short delay
+        setTimeout(() => {
+          if (this.client) {
+            this.register();
+          }
+        }, 1000);
+      } else {
+        logger.error('Registration rejected', {
+          reason: message.reason
+        });
+        
+        // Reject auth promise - authentication failed
+        if (this.authReject) {
+          this.authReject(new Error(`Registration rejected: ${message.reason}`));
+          this.authResolve = null;
+          this.authReject = null;
+        }
+        
+        this.disconnect();
+      }
+    }
+  }
+
+  private async handleAuthRequest(message: RegistrationAckMessage): Promise<void> {
+    if (!message.serverSecretKey) {
+      logger.error('Server did not provide secret key for verification');
       this.disconnect();
+      return;
+    }
+
+    // Get the client's configured secret key from EvaluationConfig
+    const config = getEvaluationConfig();
+    const clientSecretKey = config.secretKey || '';
+
+    // Verify if the server's secret key matches the client's configured key
+    const verified = clientSecretKey === message.serverSecretKey;
+
+    logger.info('Verifying secret key', { 
+      hasClientKey: !!clientSecretKey,
+      hasServerKey: !!message.serverSecretKey,
+      verified 
+    });
+
+    // Send verification response
+    const authMessage = createAuthVerifyMessage(message.clientId, verified);
+    this.client?.send(authMessage);
+
+    if (!verified) {
+      logger.error('Secret key verification failed - keys do not match');
+      // Reject auth promise immediately since we know auth will fail
+      if (this.authReject) {
+        this.authReject(new Error('Secret key verification failed - keys do not match'));
+        this.authResolve = null;
+        this.authReject = null;
+      }
     }
   }
 
@@ -251,25 +331,21 @@ export class EvaluationAgent {
       const executionTime = Date.now() - startTime;
 
       // Send JSON-RPC success response
-      const rpcResponse = {
-        jsonrpc: '2.0',
-        id: id,
-        result: {
-          output: toolResult,
-          executionTime,
-          status: 'success',
-          steps: [{
-            tool: params.tool,
-            timestamp: new Date().toISOString(),
-            duration: executionTime,
-            status: 'success'
-          }],
-          metadata: {
-            url: params.url,
-            evaluationId: params.evaluationId
-          }
+      const rpcResponse = createSuccessResponse(
+        id,
+        toolResult,
+        executionTime,
+        [{
+          tool: params.tool,
+          timestamp: new Date().toISOString(),
+          duration: executionTime,
+          status: 'success'
+        }],
+        {
+          url: params.url,
+          evaluationId: params.evaluationId
         }
-      };
+      );
 
       if (this.client) {
         this.client.send(rpcResponse);
@@ -292,20 +368,17 @@ export class EvaluationAgent {
       });
 
       // Send JSON-RPC error response
-      const rpcResponse = {
-        jsonrpc: '2.0',
-        id: id,
-        error: {
-          code: ErrorCodes.TOOL_EXECUTION_ERROR,
-          message: 'Tool execution failed',
-          data: {
-            tool: params.tool,
-            error: errorMessage,
-            url: params.url,
-            timestamp: new Date().toISOString()
-          }
+      const rpcResponse = createErrorResponse(
+        id,
+        ErrorCodes.TOOL_EXECUTION_ERROR,
+        'Tool execution failed',
+        {
+          tool: params.tool,
+          error: errorMessage,
+          url: params.url,
+          timestamp: new Date().toISOString()
         }
-      };
+      );
 
       if (this.client) {
         this.client.send(rpcResponse);

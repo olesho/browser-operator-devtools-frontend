@@ -8,6 +8,17 @@ import { createAndConnectEvaluationAgent, getEvaluationAgent, disconnectEvaluati
 
 const logger = createLogger('EvaluationConfig');
 
+// Localized strings for evaluation configuration
+// TODO: Move to proper i18n system when evaluation UI is added to SettingsDialog
+const EvaluationStrings = {
+  testingConnection: 'Testing connection...',
+  connectionSuccessful: 'Connection successful',
+  connectionFailed: 'Connection failed',
+  unknownConnectionError: 'Unknown connection error',
+  evaluationNotEnabled: 'Evaluation is not enabled',
+  clientIdNotAvailable: 'Client ID not available',
+};
+
 export interface EvaluationConfiguration {
   enabled: boolean;
   endpoint: string;
@@ -62,21 +73,26 @@ class EvaluationConfigStore {
   }
 
   setConfig(newConfig: EvaluationConfiguration): void {
-    this.config = { ...newConfig };
+    // Preserve existing client ID if new config doesn't have one
+    const preservedClientId = newConfig.clientId || this.config.clientId;
+    
+    this.config = { ...newConfig, clientId: preservedClientId };
+    
+    // Ensure we have a client ID (generate if needed)
+    this.ensureClientId();
+    
     logger.info('Evaluation configuration updated', {
-      enabled: newConfig.enabled,
-      endpoint: newConfig.endpoint,
-      clientId: newConfig.clientId
+      enabled: this.config.enabled,
+      endpoint: this.config.endpoint,
+      clientId: this.config.clientId
     });
 
     // Save to localStorage for persistence
     try {
-      localStorage.setItem('ai_chat_evaluation_enabled', String(newConfig.enabled));
-      localStorage.setItem('ai_chat_evaluation_endpoint', newConfig.endpoint);
-      localStorage.setItem('ai_chat_evaluation_secret_key', newConfig.secretKey || '');
-      if (newConfig.clientId) {
-        localStorage.setItem('ai_chat_evaluation_client_id', newConfig.clientId);
-      }
+      localStorage.setItem('ai_chat_evaluation_enabled', String(this.config.enabled));
+      localStorage.setItem('ai_chat_evaluation_endpoint', this.config.endpoint);
+      localStorage.setItem('ai_chat_evaluation_secret_key', this.config.secretKey || '');
+      localStorage.setItem('ai_chat_evaluation_client_id', this.config.clientId || '');
     } catch (error) {
       logger.warn('Failed to save evaluation config to localStorage:', error);
     }
@@ -90,17 +106,18 @@ class EvaluationConfigStore {
 
   private ensureClientId(): void {
     if (!this.config.clientId) {
-      // For now, use the hardcoded client ID that matches server config
-      // TODO: In production, generate a new UUID and register it with the server
-      const clientId = '550e8400-e29b-41d4-a716-446655440000';
+      // Generate a unique client ID for this installation
+      const clientId = this.generateUUID();
       this.config.clientId = clientId;
       
       try {
         localStorage.setItem('ai_chat_evaluation_client_id', clientId);
-        logger.info('Using configured client ID:', clientId);
+        logger.info('Generated and saved new client ID:', clientId);
       } catch (error) {
         logger.warn('Failed to save client ID to localStorage:', error);
       }
+    } else {
+      logger.debug('Using existing client ID:', this.config.clientId);
     }
   }
 
@@ -119,14 +136,14 @@ class EvaluationConfigStore {
 
   async connect(): Promise<void> {
     if (!this.config.enabled) {
-      throw new Error('Evaluation is not enabled');
+      throw new Error(EvaluationStrings.evaluationNotEnabled);
     }
 
     // Ensure client ID exists
     this.ensureClientId();
 
     if (!this.config.clientId) {
-      throw new Error('Client ID not available');
+      throw new Error(EvaluationStrings.clientIdNotAvailable);
     }
 
     // Check if already connected
@@ -179,9 +196,9 @@ class EvaluationConfigStore {
       }
 
       client.disconnect();
-      return { success: true, message: 'Connection successful' };
+      return { success: true, message: EvaluationStrings.connectionSuccessful };
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown connection error';
+      const message = error instanceof Error ? error.message : EvaluationStrings.unknownConnectionError;
       logger.error('Connection test failed:', error);
       return { success: false, message };
     }

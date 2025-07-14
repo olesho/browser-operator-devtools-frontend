@@ -93,7 +93,7 @@ class EvaluationServer {
     });
   }
 
-  handleMessage(connection, message) {
+  async handleMessage(connection, message) {
     try {
       // Try to handle as RPC response first
       if (connection.rpcClient.handleResponse(message)) {
@@ -105,7 +105,7 @@ class EvaluationServer {
       
       switch (data.type) {
         case 'register':
-          this.handleRegistration(connection, data);
+          await this.handleRegistration(connection, data);
           break;
         case 'ping':
           this.sendMessage(connection.ws, { 
@@ -130,6 +130,9 @@ class EvaluationServer {
         case 'status':
           this.handleStatusUpdate(connection, data);
           break;
+        case 'auth_verify':
+          this.handleAuthVerification(connection, data);
+          break;
         default:
           logger.warn('Unknown message type', { 
             connectionId: connection.id,
@@ -145,46 +148,85 @@ class EvaluationServer {
     }
   }
 
-  handleRegistration(connection, data) {
+  async handleRegistration(connection, data) {
     try {
       const { clientId, secretKey, capabilities } = data;
       
-      // Validate client
-      const validation = this.clientManager.validateClient(clientId, secretKey);
+      logger.info('Registration attempt', { 
+        clientId, 
+        hasSecretKey: !!secretKey,
+        secretKey: secretKey ? '[REDACTED]' : 'none'
+      });
+      
+      // Check if client exists (don't validate secret key yet - that happens later)
+      const validation = this.clientManager.validateClient(clientId, null, true);
       if (!validation.valid) {
+        if (validation.reason === 'Client not found') {
+          // Auto-create new client configuration
+          try {
+            logger.info('Auto-creating new client configuration', { clientId });
+            await this.clientManager.createClientWithId(clientId, `DevTools Client ${clientId.substring(0, 8)}`, 'hello');
+            
+            // Send rejection for first-time registration to allow server to set secret key
+            this.sendMessage(connection.ws, {
+              type: 'registration_ack',
+              clientId,
+              status: 'rejected',
+              reason: 'New client created. Please reconnect to complete registration.',
+              newClient: true
+            });
+            logger.info('New client configuration created, requesting reconnection', { clientId });
+            return;
+          } catch (error) {
+            this.sendMessage(connection.ws, {
+              type: 'registration_ack',
+              clientId,
+              status: 'rejected',
+              reason: `Failed to create client configuration: ${error.message}`
+            });
+            logger.error('Failed to auto-create client', { clientId, error: error.message });
+            return;
+          }
+        } else {
+          this.sendMessage(connection.ws, {
+            type: 'registration_ack',
+            clientId,
+            status: 'rejected',
+            reason: validation.reason
+          });
+          logger.warn('Client registration rejected', {
+            clientId,
+            reason: validation.reason
+          });
+          return;
+        }
+      }
+      
+      // Get client info including the server's secret key for this client
+      const client = this.clientManager.getClient(clientId);
+      if (!client) {
         this.sendMessage(connection.ws, {
           type: 'registration_ack',
           clientId,
           status: 'rejected',
-          reason: validation.reason
-        });
-        logger.warn('Client registration rejected', {
-          clientId,
-          reason: validation.reason
+          reason: 'Client configuration not found'
         });
         return;
       }
       
-      // Register client
-      const result = this.clientManager.registerClient(clientId, secretKey, capabilities);
-      
-      // Update connection with client info
-      connection.registered = true;
-      connection.clientId = clientId;
-      connection.capabilities = capabilities;
-      
-      // Move connection to use clientId as key
-      this.connectedAgents.delete(connection.id);
-      this.connectedAgents.set(clientId, connection);
-      
-      // Send acknowledgment
+      // Send server's secret key to client for verification
       this.sendMessage(connection.ws, {
         type: 'registration_ack',
         clientId,
-        status: 'accepted',
-        message: result.clientName ? `Welcome ${result.clientName}` : 'Client registered successfully',
-        evaluationsCount: result.evaluationsCount
+        status: 'auth_required',
+        serverSecretKey: client.secretKey || '',
+        message: 'Please verify secret key'
       });
+      
+      // Store connection info but don't register yet
+      connection.clientId = clientId;
+      connection.capabilities = capabilities;
+      connection.awaitingAuth = true;
       
       logger.info('Client registered successfully', {
         clientId,
@@ -221,6 +263,52 @@ class EvaluationServer {
       evaluationId,
       status
     );
+  }
+
+  handleAuthVerification(connection, data) {
+    if (!connection.awaitingAuth) {
+      logger.warn('Received auth verification from non-awaiting connection', {
+        connectionId: connection.id,
+        clientId: connection.clientId
+      });
+      return;
+    }
+
+    const { clientId, verified } = data;
+    
+    if (verified) {
+      // Authentication successful - complete registration (skip secret validation since already verified)
+      const result = this.clientManager.registerClient(clientId, '', connection.capabilities, true);
+      
+      connection.registered = true;
+      connection.awaitingAuth = false;
+      
+      // Move connection to use clientId as key
+      this.connectedAgents.delete(connection.id);
+      this.connectedAgents.set(clientId, connection);
+      
+      // Send final acknowledgment
+      this.sendMessage(connection.ws, {
+        type: 'registration_ack',
+        clientId,
+        status: 'accepted',
+        message: result.clientName ? `Welcome ${result.clientName}` : 'Client authenticated successfully',
+        evaluationsCount: result.evaluationsCount
+      });
+      
+      logger.info('Client authenticated and registered', { clientId });
+    } else {
+      // Authentication failed
+      this.sendMessage(connection.ws, {
+        type: 'registration_ack',
+        clientId,
+        status: 'rejected',
+        reason: 'Secret key verification failed'
+      });
+      
+      logger.warn('Client authentication failed', { clientId });
+      connection.ws.close(1008, 'Authentication failed');
+    }
   }
 
   handleDisconnection(connection) {

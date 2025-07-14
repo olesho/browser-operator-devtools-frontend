@@ -81,10 +81,7 @@ export class WebSocketRPCClient {
           logger.info('WebSocket connected', { endpoint: this.endpoint, readyState: this.websocket?.readyState });
           this.emit('connected');
           
-          // Send authentication if secret key is provided
-          if (this.secretKey) {
-            this.sendAuthRequest();
-          }
+          // Note: Authentication is handled via the register message in the evaluation protocol
           
           resolve();
         };
@@ -262,23 +259,6 @@ export class WebSocketRPCClient {
     }
   }
 
-  private sendAuthRequest(): void {
-    if (!this.secretKey) {
-      return;
-    }
-
-    try {
-      const authRequest = {
-        id: this.generateRequestId(),
-        method: 'auth',
-        params: { secretKey: this.secretKey }
-      };
-      this.websocket!.send(JSON.stringify(authRequest));
-      logger.debug('Sent authentication request');
-    } catch (error) {
-      logger.error('Failed to send authentication request:', error);
-    }
-  }
 
   private scheduleReconnect(): void {
     if (this.reconnectTimeoutId) {

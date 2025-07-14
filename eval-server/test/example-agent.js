@@ -14,9 +14,6 @@ class ExampleAgent {
       this.ws.on('open', () => {
         console.log('Connected to evaluation server');
         this.connected = true;
-        
-        // Send ready signal
-        this.send({ type: 'ready' });
         resolve();
       });
 
@@ -42,7 +39,17 @@ class ExampleAgent {
       
       switch (message.type) {
         case 'welcome':
-          console.log(`Welcome message: ${message.message}, Agent ID: ${message.agentId}`);
+          console.log(`Welcome message: Server ID: ${message.serverId}, Version: ${message.version}`);
+          // Register with the server after receiving welcome
+          this.register();
+          break;
+        case 'registration_ack':
+          if (message.status === 'accepted') {
+            console.log('Registration accepted, sending ready signal');
+            this.send({ type: 'ready' });
+          } else {
+            console.error('Registration rejected:', message.reason);
+          }
           break;
         case 'pong':
           console.log('Received pong');
@@ -63,7 +70,7 @@ class ExampleAgent {
   handleRpcRequest(request) {
     console.log(`Received RPC call: ${request.method}`, request.params);
 
-    if (request.method === 'Evaluate') {
+    if (request.method === 'evaluate') {
       // Simulate agent processing
       const response = this.evaluate(request.params);
       
@@ -117,6 +124,21 @@ class ExampleAgent {
     
     console.log(`Generated response (${fullResponse.length} characters)`);
     return fullResponse;
+  }
+
+  register() {
+    // Register with a default client ID for testing
+    // In production, this would be generated dynamically
+    this.send({
+      type: 'register',
+      clientId: '550e8400-e29b-41d4-a716-446655440000',
+      secretKey: 'example-secret-key',
+      capabilities: {
+        tools: ['example_tool'],
+        maxConcurrency: 1,
+        version: '1.0.0'
+      }
+    });
   }
 
   send(data) {

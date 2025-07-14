@@ -7,7 +7,7 @@ import * as UI from '../../../ui/legacy/legacy.js';
 import { LLMClient } from '../LLM/LLMClient.js';
 import { createLogger } from '../core/Logger.js';
 import { getTracingConfig, setTracingConfig, isTracingEnabled } from '../tracing/TracingConfig.js';
-import { getEvaluationConfig, setEvaluationConfig, isEvaluationEnabled, testEvaluationConnection, connectToEvaluationService, getEvaluationClientId } from '../common/EvaluationConfig.js';
+import { getEvaluationConfig, setEvaluationConfig, isEvaluationEnabled, testEvaluationConnection, connectToEvaluationService, getEvaluationClientId, isEvaluationConnected } from '../common/EvaluationConfig.js';
 
 const logger = createLogger('SettingsDialog');
 
@@ -1960,6 +1960,51 @@ export class SettingsDialog {
     evaluationEnabledHint.textContent = i18nString(UIStrings.evaluationEnabledHint);
     evaluationSection.appendChild(evaluationEnabledHint);
 
+    // Connection status indicator
+    const connectionStatusContainer = document.createElement('div');
+    connectionStatusContainer.className = 'connection-status-container';
+    connectionStatusContainer.style.display = 'flex';
+    connectionStatusContainer.style.alignItems = 'center';
+    connectionStatusContainer.style.gap = '8px';
+    connectionStatusContainer.style.marginTop = '8px';
+    connectionStatusContainer.style.fontSize = '13px';
+    evaluationSection.appendChild(connectionStatusContainer);
+
+    const connectionStatusDot = document.createElement('div');
+    connectionStatusDot.className = 'connection-status-dot';
+    connectionStatusDot.style.width = '8px';
+    connectionStatusDot.style.height = '8px';
+    connectionStatusDot.style.borderRadius = '50%';
+    connectionStatusDot.style.flexShrink = '0';
+    connectionStatusContainer.appendChild(connectionStatusDot);
+
+    const connectionStatusText = document.createElement('span');
+    connectionStatusText.className = 'connection-status-text';
+    connectionStatusContainer.appendChild(connectionStatusText);
+
+    // Function to update connection status
+    const updateConnectionStatus = () => {
+      const isConnected = isEvaluationConnected();
+      
+      logger.debug('Updating connection status', { isConnected });
+      
+      if (isConnected) {
+        connectionStatusDot.style.backgroundColor = 'var(--color-accent-green)';
+        connectionStatusText.textContent = 'Connected to evaluation server';
+        connectionStatusText.style.color = 'var(--color-accent-green)';
+      } else {
+        connectionStatusDot.style.backgroundColor = 'var(--color-text-disabled)';
+        connectionStatusText.textContent = 'Not connected';
+        connectionStatusText.style.color = 'var(--color-text-disabled)';
+      }
+    };
+
+    // Update status initially and when evaluation is enabled/disabled
+    updateConnectionStatus();
+    
+    // Set up periodic status updates every 2 seconds
+    const statusUpdateInterval = setInterval(updateConnectionStatus, 2000);
+
     // Evaluation configuration container (shown when enabled)
     const evaluationConfigContainer = document.createElement('div');
     evaluationConfigContainer.className = 'evaluation-config-container';
@@ -2126,10 +2171,16 @@ export class SettingsDialog {
         testEvaluationStatus.textContent = '✓ Connected successfully';
         testEvaluationStatus.style.backgroundColor = 'var(--color-accent-green-background)';
         testEvaluationStatus.style.color = 'var(--color-accent-green)';
+        
+        // Update connection status indicator with a small delay to ensure connection is established
+        setTimeout(updateConnectionStatus, 500);
       } catch (error) {
         testEvaluationStatus.textContent = `✗ ${error instanceof Error ? error.message : 'Connection failed'}`;
         testEvaluationStatus.style.backgroundColor = 'var(--color-accent-red-background)';
         testEvaluationStatus.style.color = 'var(--color-accent-red)';
+        
+        // Update connection status indicator
+        updateConnectionStatus();
       } finally {
         connectEvaluationButton.disabled = false;
         setTimeout(() => {

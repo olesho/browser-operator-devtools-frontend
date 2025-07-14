@@ -143,15 +143,15 @@ class ClientManager {
   /**
    * Register a new client with authentication
    */
-  registerClient(clientId, secretKey, capabilities) {
+  registerClient(clientId, secretKey, capabilities, skipSecretValidation = false) {
     const client = this.clients.get(clientId);
     
     if (!client) {
       throw new Error(`Client ${clientId} not found. Please create a YAML configuration file.`);
     }
     
-    // Verify secret key if configured
-    if (client.secretKey && client.secretKey !== secretKey) {
+    // Verify secret key if configured (unless we're skipping validation)
+    if (!skipSecretValidation && client.secretKey && client.secretKey !== secretKey) {
       throw new Error('Invalid secret key');
     }
     
@@ -210,57 +210,32 @@ class ClientManager {
    */
   async createClient(clientName, secretKey = null) {
     const clientId = uuidv4();
+    return this.createClientWithId(clientId, clientName, secretKey);
+  }
+
+  /**
+   * Create a new client with a specific ID
+   */
+  async createClientWithId(clientId, clientName, secretKey = null) {
     const yamlPath = path.join(this.clientsDir, `${clientId}.yaml`);
     
-    // Create default client configuration
+    // Create simplified client configuration (evaluations come from evals directory)
     const defaultConfig = {
       client: {
         id: clientId,
         name: clientName,
         secret_key: secretKey,
-        description: `Auto-generated client for ${clientName}`
+        description: `Auto-generated DevTools evaluation client`
       },
       settings: {
         max_concurrent_evaluations: 3,
-        default_timeout: 30000,
+        default_timeout: 45000,
         retry_policy: {
           max_retries: 2,
           backoff_multiplier: 2,
           initial_delay: 1000
         }
-      },
-      evaluations: [
-        {
-          id: 'example-001',
-          name: 'Example Evaluation',
-          description: 'A sample evaluation to get started',
-          enabled: false,
-          target: {
-            url: 'https://example.com'
-          },
-          tool: 'extract_schema_data',
-          input: {
-            schema: {
-              type: 'object',
-              properties: {
-                title: { type: 'string' }
-              }
-            }
-          },
-          validation: {
-            type: 'llm-judge',
-            llm_judge: {
-              model: 'gpt-4o-mini',
-              criteria: [
-                'Title should be extracted correctly'
-              ]
-            }
-          },
-          metadata: {
-            tags: ['example', 'starter']
-          }
-        }
-      ]
+      }
     };
     
     // Write YAML file
@@ -269,6 +244,9 @@ class ClientManager {
     
     // Load the new client
     this.loadClient(clientId);
+    
+    // Load evaluations for the new client
+    this.loadAllEvaluations();
     
     logger.info(`Created new client: ${clientId}`);
     return { clientId, yamlPath };
@@ -298,17 +276,33 @@ class ClientManager {
   /**
    * Validate client exists and is authorized
    */
-  validateClient(clientId, secretKey = null) {
+  validateClient(clientId, secretKey = null, skipSecretValidation = false) {
     const client = this.clients.get(clientId);
     
+    logger.debug('validateClient', {
+      clientId,
+      clientExists: !!client,
+      hasSecretKey: !!secretKey,
+      skipSecretValidation,
+      clientSecretKey: client ? '[REDACTED]' : 'N/A'
+    });
+    
     if (!client) {
+      logger.debug('Client not found', { clientId });
       return { valid: false, reason: 'Client not found' };
     }
     
-    if (client.secretKey && client.secretKey !== secretKey) {
+    // Skip secret key validation if explicitly requested (for new auth flow)
+    if (!skipSecretValidation && secretKey !== null && client.secretKey && client.secretKey !== secretKey) {
+      logger.warn('Secret key mismatch', { 
+        clientId,
+        hasProvidedKey: !!secretKey,
+        hasStoredKey: !!client.secretKey
+      });
       return { valid: false, reason: 'Invalid secret key' };
     }
     
+    logger.debug('Client validation successful', { clientId });
     return { valid: true };
   }
 }

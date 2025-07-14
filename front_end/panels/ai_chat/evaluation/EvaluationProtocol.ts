@@ -51,10 +51,18 @@ export interface WelcomeMessage {
 export interface RegistrationAckMessage {
   type: 'registration_ack';
   clientId: string;
-  status: 'accepted' | 'rejected';
+  status: 'accepted' | 'rejected' | 'auth_required';
   message?: string;
   evaluationsCount?: number;
   reason?: string;  // Only present if rejected
+  serverSecretKey?: string;  // Present when status is 'auth_required'
+  newClient?: boolean;  // Present when a new client was created
+}
+
+export interface AuthVerifyMessage {
+  type: 'auth_verify';
+  clientId: string;
+  verified: boolean;
 }
 
 export interface PongMessage {
@@ -175,6 +183,14 @@ export function createReadyMessage(): ReadyMessage {
   return {
     type: 'ready',
     timestamp: new Date().toISOString()
+  };
+}
+
+export function createAuthVerifyMessage(clientId: string, verified: boolean): AuthVerifyMessage {
+  return {
+    type: 'auth_verify',
+    clientId,
+    verified
   };
 }
 
