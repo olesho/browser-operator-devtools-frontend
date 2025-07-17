@@ -6,6 +6,8 @@ enabled: true
 
 target:
   url: "https://github.com/microsoft/TypeScript"
+  wait_for: "networkidle"
+  wait_timeout: 5000
 
 tool: "extract_schema_data"
 timeout: 30000
@@ -39,9 +41,6 @@ input:
   instruction: "Extract repository metadata and basic statistics"
   reasoning: "Testing extraction from a well-structured GitHub repository page"
 
-schedule:
-  type: "on_demand"
-
 validation:
   type: "hybrid"
   snapshot:
@@ -51,14 +50,12 @@ validation:
     structure_only: false
   llm_judge:
     model: "gpt-4.1-mini"
+    temperature: 0.3
     criteria:
       - "Repository name matches the GitHub page"
       - "Description accurately reflects the project purpose"
       - "Programming language is correctly identified"
       - "Topic tags are relevant to the project"
-  hybrid:
-    weight_llm: 0.7
-    weight_snapshot: 0.3
 
 metadata:
   tags: ["github", "repository", "structured"]
@@ -66,3 +63,4 @@ metadata:
   timeout: 30000
   retries: 1
   flaky: false
+  owner: "devtools-team"

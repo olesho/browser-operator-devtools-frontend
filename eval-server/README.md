@@ -20,12 +20,7 @@ A WebSocket-based evaluation server for LLM agents using LLM-as-a-judge methodol
    npm start
    ```
 
-4. **Test with example agent** (in another terminal)
-   ```bash
-   npm test
-   ```
-
-5. **Use interactive CLI** (alternative to step 3)
+4. **Use interactive CLI** (alternative to step 3)
    ```bash
    npm run cli
    ```
@@ -46,10 +41,6 @@ Your agent needs to:
 1. Connect to the WebSocket server (default: `ws://localhost:8080`)
 2. Send a `{"type": "ready"}` message when ready for evaluations
 3. Implement the `Evaluate` RPC method that accepts a string task and returns a string response
-
-## Example Agent
-
-See `test/example-agent.js` for a complete implementation example.
 
 ## For more details
 

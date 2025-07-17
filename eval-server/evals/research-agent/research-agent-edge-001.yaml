@@ -6,6 +6,8 @@ enabled: true
 
 target:
   url: "https://www.google.com"
+  wait_for: "networkidle"
+  wait_timeout: 5000
 
 tool: "research_agent"
 timeout: 180000
@@ -14,13 +16,11 @@ input:
   query: "quantum bluetooth watermelon encryption algorithm 2024"
   reasoning: "Testing edge case handling when query yields no meaningful results"
 
-schedule:
-  type: "on_demand"
-
 validation:
   type: "llm-judge"
   llm_judge:
     model: "gpt-4.1-mini"
+    temperature: 0.3
     criteria:
       - "Agent recognizes when query yields limited or unreliable results"
       - "Demonstrates appropriate search strategy modification"
@@ -32,7 +32,8 @@ validation:
 
 metadata:
   tags: ["edge-case", "no-results", "error-handling", "fictional"]
-  priority: "low"
+  priority: "high"
   timeout: 180000
   retries: 1
   flaky: false
+  owner: "devtools-team"

@@ -6,6 +6,8 @@ enabled: true
 
 target:
   url: "https://www.wikipedia.org"
+  wait_for: "networkidle"
+  wait_timeout: 5000
 
 tool: "action_agent"
 timeout: 60000
@@ -14,13 +16,11 @@ input:
   objective: "Click on the \"English\" language link to navigate to English Wikipedia"
   reasoning: "Testing navigation through link clicks on a multilingual site"
 
-schedule:
-  type: "on_demand"
-
 validation:
   type: "llm-judge"
   llm_judge:
-    model: "gpt-4o"
+    model: "gpt-4.1-mini"
+    temperature: 0.3
     criteria:
       - "Identified the correct language link among many options"
       - "Successfully clicked the English link"
@@ -39,4 +39,8 @@ validation:
 
 metadata:
   tags: ["action", "navigation", "click", "wikipedia", "multilingual"]
-  priority: "normal"
+  priority: "high"
+  timeout: 60000
+  retries: 2
+  flaky: false
+  owner: "devtools-team"

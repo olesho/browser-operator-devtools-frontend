@@ -6,6 +6,8 @@ enabled: true
 
 target:
   url: "https://www.google.com"
+  wait_for: "networkidle"
+  wait_timeout: 5000
 
 tool: "research_agent"
 timeout: 200000
@@ -14,13 +16,11 @@ input:
   query: "JavaScript vs TypeScript comparison web development pros cons differences"
   reasoning: "Testing comparative research requiring balanced analysis of multiple options"
 
-schedule:
-  type: "on_demand"
-
 validation:
   type: "llm-judge"
   llm_judge:
     model: "gpt-4.1-mini"
+    temperature: 0.3
     criteria:
       - "Research covers both JavaScript and TypeScript comprehensively"
       - "Includes clear comparison points (syntax, features, ecosystem)"
@@ -36,3 +36,4 @@ metadata:
   timeout: 200000
   retries: 2
   flaky: false
+  owner: "devtools-team"

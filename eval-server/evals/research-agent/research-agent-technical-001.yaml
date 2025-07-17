@@ -6,21 +6,21 @@ enabled: true
 
 target:
   url: "https://www.google.com"
+  wait_for: "networkidle"
+  wait_timeout: 5000
 
 tool: "research_agent"
-timeout: 300000
+timeout: 900000
 
 input:
   query: "WebAssembly WASM performance benchmarks use cases implementation details"
   reasoning: "Testing deep technical research requiring specialized knowledge synthesis"
 
-schedule:
-  type: "on_demand"
-
 validation:
   type: "llm-judge"
   llm_judge:
     model: "gpt-4.1-mini"
+    temperature: 0.3
     criteria:
       - "Research covers technical details of WebAssembly architecture"
       - "Includes performance benchmarks and comparison data"
@@ -32,7 +32,8 @@ validation:
 
 metadata:
   tags: ["technical", "deep-dive", "performance", "webassembly"]
-  priority: "normal"
-  timeout: 300000
+  priority: "high"
+  timeout: 900000
   retries: 2
   flaky: false
+  owner: "devtools-team"

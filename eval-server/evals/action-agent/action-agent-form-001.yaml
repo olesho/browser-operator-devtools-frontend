@@ -6,6 +6,8 @@ enabled: true
 
 target:
   url: "https://www.google.com"
+  wait_for: "networkidle"
+  wait_timeout: 5000
 
 tool: "action_agent"
 timeout: 45000
@@ -14,13 +16,11 @@ input:
   objective: "Fill the search box with \"Chrome DevTools automation testing\""
   reasoning: "Testing form input capability with a specific search query"
 
-schedule:
-  type: "on_demand"
-
 validation:
   type: "llm-judge"
   llm_judge:
-    model: "gpt-4o"
+    model: "gpt-4.1-mini"
+    temperature: 0.3
     criteria:
       - "Successfully identified the search input field"
       - "Used perform_action with fill method"
@@ -40,3 +40,7 @@ validation:
 metadata:
   tags: ["action", "form-fill", "input", "google", "basic"]
   priority: "high"
+  timeout: 60000
+  retries: 2
+  flaky: false
+  owner: "devtools-team"

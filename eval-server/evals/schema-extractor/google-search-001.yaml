@@ -6,6 +6,8 @@ enabled: true
 
 target:
   url: "https://www.google.com/search?q=chrome+devtools+tutorial"
+  wait_for: "networkidle"
+  wait_timeout: 5000
 
 tool: "extract_schema_data"
 timeout: 45000
@@ -53,13 +55,11 @@ input:
   instruction: "Extract the top 10 search results with titles, URLs, and snippets. Also extract featured snippet if present and related searches"
   reasoning: "Testing extraction from Google search results page with various result types"
 
-schedule:
-  type: "on_demand"
-
 validation:
-  type: "llm-judge"
+  type: "llm_judge"
   llm_judge:
     model: "gpt-4.1-mini"
+    temperature: 0.3
     criteria:
       - "Search results are relevant to the query"
       - "Each result has a valid title, URL, and snippet"
@@ -73,3 +73,4 @@ metadata:
   timeout: 45000
   retries: 2
   flaky: true
+  owner: "devtools-team"

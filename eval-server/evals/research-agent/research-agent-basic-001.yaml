@@ -6,6 +6,8 @@ enabled: true
 
 target:
   url: "https://www.google.com"
+  wait_for: "networkidle"
+  wait_timeout: 5000
 
 tool: "research_agent"
 timeout: 180000
@@ -13,9 +15,6 @@ timeout: 180000
 input:
   query: "History and development of Chrome DevTools browser developer tools"
   reasoning: "Testing basic research capabilities on a well-documented technical topic"
-
-schedule:
-  type: "on_demand"
 
 validation:
   type: "llm-judge"
@@ -37,3 +36,4 @@ metadata:
   timeout: 180000
   retries: 2
   flaky: false
+  owner: "devtools-team"

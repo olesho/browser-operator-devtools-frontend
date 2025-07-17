@@ -6,6 +6,8 @@ enabled: true
 
 target:
   url: "https://www.google.com"
+  wait_for: "networkidle"
+  wait_timeout: 5000
 
 tool: "research_agent"
 timeout: 240000
@@ -14,13 +16,11 @@ input:
   query: "Django vs Flask Python web framework comparison features performance"
   reasoning: "Testing effective orchestration of navigation, extraction, and fetching tools"
 
-schedule:
-  type: "on_demand"
-
 validation:
   type: "llm-judge"
   llm_judge:
     model: "gpt-4.1-mini"
+    temperature: 0.3
     criteria:
       - "Agent effectively used navigate_url to access search engines"
       - "Schema-based extraction was used to gather structured search results"
@@ -37,3 +37,4 @@ metadata:
   timeout: 240000
   retries: 2
   flaky: false
+  owner: "devtools-team"

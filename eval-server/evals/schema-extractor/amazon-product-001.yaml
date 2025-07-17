@@ -6,6 +6,8 @@ enabled: true
 
 target:
   url: "https://www.amazon.com/Obelisk-Climbing-Rustproof-Trellises-Clematis/dp/B0B4SBY6QD/"
+  wait_for: "networkidle"
+  wait_timeout: 5000
 
 tool: "extract_schema_data"
 timeout: 60000
@@ -54,13 +56,11 @@ input:
   instruction: "Extract comprehensive product information including pricing, ratings, and key features"
   reasoning: "Testing extraction from a dynamic e-commerce page with complex structure"
 
-schedule:
-  type: "on_demand"
-
 validation:
-  type: "llm-judge"
+  type: "llm_judge"
   llm_judge:
     model: "gpt-4.1-mini"
+    temperature: 0.3
     criteria:
       - "Product title is accurate and complete"
       - "Price information is current and properly formatted"
@@ -71,7 +71,8 @@ validation:
 
 metadata:
   tags: ["ecommerce", "amazon", "product", "dynamic"]
-  priority: "normal"
+  priority: "high"
   timeout: 60000
   retries: 3
   flaky: true
+  owner: "devtools-team"

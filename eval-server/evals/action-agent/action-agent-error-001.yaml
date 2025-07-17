@@ -6,6 +6,8 @@ enabled: true
 
 target:
   url: "https://www.google.com"
+  wait_for: "networkidle"
+  wait_timeout: 5000
 
 tool: "action_agent"
 timeout: 60000
@@ -15,13 +17,11 @@ input:
   reasoning: "Testing error handling when element does not exist"
   hint: "There is no Sign Up button on Google homepage - agent should handle gracefully"
 
-schedule:
-  type: "on_demand"
-
 validation:
   type: "llm-judge"
   llm_judge:
-    model: "gpt-4o"
+    model: "gpt-4.1-mini"
+    temperature: 0.3
     criteria:
       - "Attempted to find the requested element"
       - "Recognized that the element does not exist"
@@ -40,6 +40,8 @@ validation:
 
 metadata:
   tags: ["action", "error-handling", "missing-element", "recovery", "edge-case"]
-  priority: "normal"
+  priority: "high"
   timeout: 60000
   retries: 1
+  flaky: false
+  owner: "devtools-team"

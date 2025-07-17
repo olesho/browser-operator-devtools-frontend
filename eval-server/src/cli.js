@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import { EvaluationServer } from './server.js';
-import { ExampleAgent } from '../test/example-agent.js';
 import readline from 'readline';
 
 class EvaluationCLI {
@@ -33,9 +32,9 @@ class EvaluationCLI {
     console.log('  clients                          - List all clients and their evaluations');
     console.log('  run <client-id> <evaluation-id>  - Run specific evaluation for a client');
     console.log('  run-all <client-id>              - Run all evaluations for a client');
-    console.log('  eval <task>                      - Evaluate all connected agents with a task (legacy)');
-    console.log('  agents                           - List connected agents');
-    console.log('  test-agent                       - Start a test agent');
+    console.log('  eval <evaluation-id>             - Run specific evaluation on all connected clients');
+    console.log('  eval all                         - Run all pending evaluations on all clients');
+    console.log('  clients-connected                - List connected clients');
     console.log('  help                             - Show this help');
     console.log('  quit                             - Exit the CLI');
     console.log('');
@@ -74,16 +73,13 @@ class EvaluationCLI {
           break;
         case 'eval':
           if (args.length === 0) {
-            console.log('Usage: eval <task>');
+            console.log('Usage: eval <evaluation-id>  OR  eval all');
           } else {
             await this.runEvaluation(args.join(' '));
           }
           break;
-        case 'agents':
-          this.listAgents();
-          break;
-        case 'test-agent':
-          this.startTestAgent();
+        case 'clients-connected':
+          this.listConnectedClients();
           break;
         case 'help':
           this.showHelp();
@@ -107,54 +103,66 @@ class EvaluationCLI {
   showStatus() {
     const status = this.server.getStatus();
     console.log('\\n📊 Server Status:');
-    console.log(`  Connected agents: ${status.connectedAgents}`);
-    console.log(`  Ready agents: ${status.readyAgents}`);
+    console.log(`  Connected clients: ${status.connectedClients}`);
+    console.log(`  Ready clients: ${status.readyClients}`);
     console.log(`  Active evaluations: ${status.activeEvaluations}`);
     console.log('');
   }
 
-  listAgents() {
-    const agents = Array.from(this.server.connectedAgents.values());
-    console.log('\\n👥 Connected Agents:');
+  listConnectedClients() {
+    const clients = Array.from(this.server.connectedClients.values());
+    console.log('\\n👥 Connected Clients:');
     
-    if (agents.length === 0) {
-      console.log('  No agents connected');
+    if (clients.length === 0) {
+      console.log('  No clients connected');
     } else {
-      agents.forEach(agent => {
-        console.log(`  ID: ${agent.id}`);
-        console.log(`    Connected: ${agent.connectedAt}`);
-        console.log(`    Ready: ${agent.ready ? 'Yes' : 'No'}`);
-        console.log(`    Address: ${agent.remoteAddress}`);
+      clients.forEach(client => {
+        console.log(`  ID: ${client.clientId || client.id}`);
+        console.log(`    Connected: ${client.connectedAt}`);
+        console.log(`    Ready: ${client.ready ? 'Yes' : 'No'}`);
+        console.log(`    Registered: ${client.registered ? 'Yes' : 'No'}`);
+        console.log(`    Address: ${client.remoteAddress}`);
         console.log('');
       });
     }
   }
 
   async runEvaluation(task) {
-    console.log(`\\n🔍 Running evaluation: "${task}"`);
+    if (task && task.includes('-')) {
+      console.log(`\\n🔍 Running specific evaluation: "${task}"`);
+    } else if (task === 'all') {
+      console.log(`\\n🔍 Running all pending evaluations`);
+    } else {
+      console.log(`\\n🔍 Running evaluation: "${task}"`);
+    }
     console.log('=====================================');
     
     try {
-      const results = await this.server.evaluateAllAgents(task);
+      const results = await this.server.evaluateAllClients(task);
       
       console.log('\\n📋 Evaluation Results:');
       results.forEach((result, index) => {
-        console.log(`\\n  Agent ${index + 1} (${result.agentId || 'unknown'}):`);
+        console.log(`\\n  Client ${index + 1} (${result.clientId || 'unknown'}):`);
         
         if (result.error) {
           console.log(`    ❌ Error: ${result.error}`);
         } else {
           console.log(`    ✅ Success`);
-          console.log(`    Duration: ${result.duration}ms`);
+          if (result.evaluationId) {
+            console.log(`    Evaluation ID: ${result.evaluationId}`);
+          }
+          if (result.duration) {
+            console.log(`    Duration: ${result.duration}ms`);
+          }
           
           if (result.judgeEvaluation?.overall_score) {
             console.log(`    Overall Score: ${result.judgeEvaluation.overall_score}/10`);
           }
           
-          if (result.agentResponse) {
-            const preview = result.agentResponse.length > 100 
-              ? result.agentResponse.substring(0, 100) + '...'
-              : result.agentResponse;
+          if (result.clientResponse) {
+            const preview = result.clientResponse.length > 100 
+              ? result.clientResponse.substring(0, 100) + '...'
+              : result.clientResponse;
             console.log(`    Response: ${preview}`);
           }
         }
@@ -197,7 +205,7 @@ class EvaluationCLI {
     
     try {
       // Check if client is connected
-      const connection = this.server.connectedAgents.get(clientId);
+      const connection = this.server.connectedClients.get(clientId);
       if (!connection || !connection.ready) {
         console.log(`❌ Client '${clientId}' is not connected or not ready`);
         return;
@@ -229,7 +237,7 @@ class EvaluationCLI {
     
     try {
       // Check if client is connected
-      const connection = this.server.connectedAgents.get(clientId);
+      const connection = this.server.connectedClients.get(clientId);
       if (!connection || !connection.ready) {
         console.log(`❌ Client '${clientId}' is not connected or not ready`);
         return;
@@ -275,16 +283,6 @@ class EvaluationCLI {
     }
   }
 
-  startTestAgent() {
-    console.log('\\n🤖 Starting test agent...');
-    
-    const agent = new ExampleAgent();
-    agent.connect().then(() => {
-      console.log('✅ Test agent connected and ready');
-    }).catch((error) => {
-      console.log(`❌ Failed to start test agent: ${error.message}`);
-    });
-  }
 
   quit() {
     console.log('\\n👋 Shutting down...');

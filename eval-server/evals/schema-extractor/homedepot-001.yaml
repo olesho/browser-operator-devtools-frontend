@@ -6,6 +6,8 @@ enabled: true
 
 target:
   url: "https://www.homedepot.com/s/power%2520drill"
+  wait_for: "networkidle"
+  wait_timeout: 5000
 
 tool: "extract_schema_data"
 timeout: 60000
@@ -69,13 +71,11 @@ input:
   instruction: "Extract product listings from Home Depot search results including prices, ratings, and availability"
   reasoning: "Testing extraction from e-commerce search results with product cards and filters"
 
-schedule:
-  type: "on_demand"
-
 validation:
   type: "llm-judge"
   llm_judge:
     model: "gpt-4.1-mini"
+    temperature: 0.3
     criteria:
       - "Products are relevant to the search query"
       - "Prices are numeric values in USD"
@@ -85,7 +85,8 @@ validation:
 
 metadata:
   tags: ["ecommerce", "homedepot", "products", "search"]
-  priority: "normal"
+  priority: "high"
   timeout: 60000
   retries: 3
   flaky: true
+  owner: "devtools-team"

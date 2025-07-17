@@ -10,7 +10,7 @@ import { APIServer } from './api-server.js';
 
 class EvaluationServer {
   constructor() {
-    this.connectedAgents = new Map();
+    this.connectedClients = new Map();
     this.rpcClient = new RpcClient();
     this.evaluator = new LLMEvaluator();
     this.evaluationQueue = [];
@@ -59,13 +59,13 @@ class EvaluationServer {
     };
 
     // Store temporarily with connection ID
-    this.connectedAgents.set(connectionId, connection);
+    this.connectedClients.set(connectionId, connection);
     
     logConnection({
       event: 'connected',
       connectionId,
       remoteAddress: connection.remoteAddress,
-      totalConnections: this.connectedAgents.size
+      totalConnections: this.connectedClients.size
     });
 
     ws.on('message', (message) => {
@@ -95,14 +95,24 @@ class EvaluationServer {
 
   async handleMessage(connection, message) {
     try {
+      // Parse message first
+      const data = JSON.parse(message);
+      
       // Try to handle as RPC response first
-      if (connection.rpcClient.handleResponse(message)) {
+      if (data.jsonrpc === '2.0' && (data.result || data.error) && data.id) {
+        if (connection.rpcClient.handleResponse(message)) {
+          return;
+        }
+        // If RPC client couldn't handle it, log but don't treat as unknown
+        logger.debug('RPC response could not be handled', {
+          connectionId: connection.id,
+          clientId: connection.clientId,
+          id: data.id
+        });
         return;
       }
 
       // Handle other message types
-      const data = JSON.parse(message);
-      
       switch (data.type) {
         case 'register':
           await this.handleRegistration(connection, data);
@@ -137,13 +147,15 @@ class EvaluationServer {
           logger.warn('Unknown message type', { 
             connectionId: connection.id,
             clientId: connection.clientId, 
-            type: data.type 
+            type: data.type,
+            messageKeys: Object.keys(data)
           });
       }
     } catch (error) {
       logger.warn('Failed to parse message', {
         connectionId: connection.id,
-        error: error.message
+        error: error.message,
+        messageLength: message.length
       });
     }
   }
@@ -284,8 +296,8 @@ class EvaluationServer {
       connection.awaitingAuth = false;
       
       // Move connection to use clientId as key
-      this.connectedAgents.delete(connection.id);
-      this.connectedAgents.set(clientId, connection);
+      this.connectedClients.delete(connection.id);
+      this.connectedClients.set(clientId, connection);
       
       // Send final acknowledgment
       this.sendMessage(connection.ws, {
@@ -316,16 +328,16 @@ class EvaluationServer {
     
     // Remove by connection ID or client ID
     if (connection.registered && connection.clientId) {
-      this.connectedAgents.delete(connection.clientId);
+      this.connectedClients.delete(connection.clientId);
     } else {
-      this.connectedAgents.delete(connection.id);
+      this.connectedClients.delete(connection.id);
     }
     
     logConnection({
       event: 'disconnected',
       connectionId: connection.id,
       clientId: connection.clientId,
-      totalConnections: this.connectedAgents.size
+      totalConnections: this.connectedClients.size
     });
   }
 
@@ -336,7 +348,7 @@ class EvaluationServer {
   }
 
   async processClientEvaluations(clientId) {
-    const client = this.connectedAgents.get(clientId);
+    const client = this.connectedClients.get(clientId);
     if (!client || !client.ready) return;
     
     // Get next pending evaluation for this client
@@ -500,27 +512,75 @@ class EvaluationServer {
     return null;
   }
 
-  async evaluateAllAgents(task) {
-    const readyAgents = Array.from(this.connectedAgents.values())
-      .filter(agent => agent.ready);
+  async evaluateAllClients(task) {
+    const readyClients = Array.from(this.connectedClients.values())
+      .filter(client => client.ready);
 
-    if (readyAgents.length === 0) {
-      throw new Error('No ready agents available');
+    if (readyClients.length === 0) {
+      throw new Error('No ready clients available');
     }
 
-    logger.info(`Starting evaluation for ${readyAgents.length} agents`, { task });
+    logger.info(`Starting evaluation for ${readyClients.length} clients`, { task });
 
-    const evaluationPromises = readyAgents.map(agent => 
-      this.evaluateAgent(agent.id, task).catch(error => ({
+    // If task looks like an evaluation ID, run that specific evaluation
+    if (task && task.includes('-')) {
+      const evaluationPromises = readyClients.map(async (client) => {
+        try {
+          // Find the specific evaluation by ID
+          const evaluation = this.clientManager.getClientEvaluations(client.clientId)
+            .find(e => e.id === task);
+          
+          if (!evaluation) {
+            logger.warn(`Evaluation '${task}' not found for client ${client.clientId}`);
+            return {
+              error: `Evaluation '${task}' not found`,
+              clientId: client.clientId
+            };
+          }
+
+          // Reset evaluation status to pending
+          this.clientManager.updateEvaluationStatus(client.clientId, evaluation.id, 'pending');
+          
+          // Execute the specific evaluation
+          await this.executeEvaluation(client, evaluation);
+          
+          return {
+            success: true,
+            clientId: client.clientId,
+            evaluationId: evaluation.id
+          };
+        } catch (error) {
+          return {
+            error: error.message,
+            clientId: client.clientId
+          };
+        }
+      });
+
+      const results = await Promise.all(evaluationPromises);
+      
+      logger.info('Specific evaluation completed', {
+        evaluationId: task,
+        totalClients: readyClients.length,
+        successfulEvaluations: results.filter(r => !r.error).length,
+        failedEvaluations: results.filter(r => r.error).length
+      });
+
+      return results;
+    }
+
+    // Otherwise, process all pending evaluations (original behavior)
+    const evaluationPromises = readyClients.map(client => 
+      this.processClientEvaluations(client.clientId).catch(error => ({
         error: error.message,
-        agentId: agent.id
+        clientId: client.clientId
       }))
     );
 
     const results = await Promise.all(evaluationPromises);
     
     logger.info('Batch evaluation completed', {
-      totalAgents: readyAgents.length,
+      totalClients: readyClients.length,
       successfulEvaluations: results.filter(r => !r.error).length,
       failedEvaluations: results.filter(r => r.error).length
     });
@@ -536,9 +596,9 @@ class EvaluationServer {
 
   getStatus() {
     return {
-      connectedAgents: this.connectedAgents.size,
-      readyAgents: Array.from(this.connectedAgents.values())
-        .filter(agent => agent.ready).length,
+      connectedClients: this.connectedClients.size,
+      readyClients: Array.from(this.connectedClients.values())
+        .filter(client => client.ready).length,
       activeEvaluations: this.activeEvaluations
     };
   }

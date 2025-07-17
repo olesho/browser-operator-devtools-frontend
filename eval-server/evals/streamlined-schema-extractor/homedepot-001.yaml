@@ -1,11 +1,13 @@
-# Home Depot product search extraction test (Streamlined)
-id: "homedepot-streamlined-001"
-name: "Extract Home Depot Product Search (Streamlined)"
-description: "Extract product listings from Home Depot search results using streamlined extractor"
+# Home Depot product search extraction test
+id: "homedepot-001"
+name: "Extract Home Depot Product Search"
+description: "Extract product listings from Home Depot search results"
 enabled: true
 
 target:
   url: "https://www.homedepot.com/s/power%2520drill"
+  wait_for: "networkidle"
+  wait_timeout: 5000
 
 tool: "extract_schema_streamlined"
 timeout: 60000
@@ -69,13 +71,11 @@ input:
   instruction: "Extract product listings from Home Depot search results including prices, ratings, and availability"
   reasoning: "Testing extraction from e-commerce search results with product cards and filters"
 
-schedule:
-  type: "on_demand"
-
 validation:
-  type: "llm-judge"
+  type: "llm_judge"
   llm_judge:
     model: "gpt-4.1-mini"
+    temperature: 0.3
     criteria:
       - "Products are relevant to the search query"
       - "Prices are numeric values in USD"
@@ -84,8 +84,9 @@ validation:
       - "Key product features are captured"
 
 metadata:
-  tags: ["ecommerce", "homedepot", "products", "search", "streamlined"]
-  priority: "normal"
+  tags: ["ecommerce", "homedepot", "products", "search"]
+  priority: "high"
   timeout: 60000
   retries: 3
   flaky: true
+  owner: "devtools-team"

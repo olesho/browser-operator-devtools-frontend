@@ -6,6 +6,8 @@ enabled: true
 
 target:
   url: "https://httpbin.org/forms/post"
+  wait_for: "networkidle"
+  wait_timeout: 5000
 
 tool: "action_agent"
 timeout: 45000
@@ -15,13 +17,11 @@ input:
   reasoning: "Testing checkbox interaction functionality using check method"
   hint: "Look for the Extra Cheese checkbox and use the check method to select it"
 
-schedule:
-  type: "on_demand"
-
 validation:
   type: "llm-judge"
   llm_judge:
-    model: "gpt-4o"
+    model: "gpt-4.1-mini"
+    temperature: 0.3
     criteria:
       - "Located the Extra Cheese checkbox in the Pizza Toppings section"
       - "Used the check method instead of click for better reliability"
@@ -40,7 +40,8 @@ validation:
 
 metadata:
   tags: ["action", "checkbox", "check", "form", "httpbin"]
-  priority: "normal"
+  priority: "high"
   timeout: 45000
   retries: 2
   flaky: false
+  owner: "devtools-team"

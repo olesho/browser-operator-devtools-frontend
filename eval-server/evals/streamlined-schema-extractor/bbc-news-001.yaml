@@ -1,11 +1,13 @@
 # News article extraction test (Streamlined)
-id: "bbc-news-streamlined-001"
-name: "Extract BBC News Article (Streamlined)"
-description: "Extract article content and metadata from a BBC News page using streamlined extractor"
+id: "bbc-news-001"
+name: "Extract BBC News Article"
+description: "Extract article content and metadata from a BBC News page"
 enabled: true
 
 target:
   url: "https://www.bbc.com/news/technology"
+  wait_for: "networkidle"
+  wait_timeout: 5000
 
 tool: "extract_schema_streamlined"
 timeout: 30000
@@ -45,13 +47,11 @@ input:
   instruction: "Extract the main headlines and featured stories from the BBC Technology news section"
   reasoning: "Testing extraction from a news aggregation page with multiple articles"
 
-schedule:
-  type: "on_demand"
-
 validation:
-  type: "llm-judge"
+  type: "llm_judge"
   llm_judge:
     model: "gpt-4.1-mini"
+    temperature: 0.3
     include_url: true
     criteria:
       - "Headlines are current and relevant to technology news"
@@ -61,8 +61,9 @@ validation:
       - "All extracted content is in English"
 
 metadata:
-  tags: ["news", "bbc", "aggregation", "dynamic", "streamlined"]
-  priority: "normal"
+  tags: ["news", "bbc", "aggregation", "dynamic"]
+  priority: "high"
   timeout: 30000
   retries: 2
   flaky: true
+  owner: "devtools-team"

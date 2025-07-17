@@ -91,8 +91,8 @@ class APIServer {
       clients: clients.map(client => ({
         id: client.id,
         name: client.name,
-        connected: this.evaluationServer.connectedAgents.has(client.id),
-        ready: this.evaluationServer.connectedAgents.get(client.id)?.ready || false
+        connected: this.evaluationServer.connectedClients.has(client.id),
+        ready: this.evaluationServer.connectedClients.get(client.id)?.ready || false
       }))
     };
   }
@@ -102,7 +102,7 @@ class APIServer {
     
     return clients.map(client => {
       const evaluations = this.evaluationServer.getClientManager().getClientEvaluations(client.id);
-      const connection = this.evaluationServer.connectedAgents.get(client.id);
+      const connection = this.evaluationServer.connectedClients.get(client.id);
       
       return {
         id: client.id,
@@ -150,7 +150,7 @@ class APIServer {
     }
 
     // Check if client is connected
-    const connection = this.evaluationServer.connectedAgents.get(clientId);
+    const connection = this.evaluationServer.connectedClients.get(clientId);
     if (!connection || !connection.ready) {
       throw new Error(`Client '${clientId}' is not connected or not ready`);
     }

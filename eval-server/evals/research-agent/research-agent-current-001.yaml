@@ -6,6 +6,8 @@ enabled: true
 
 target:
   url: "https://www.google.com"
+  wait_for: "networkidle"
+  wait_timeout: 5000
 
 tool: "research_agent"
 timeout: 240000
@@ -14,13 +16,11 @@ input:
   query: "Latest AI artificial intelligence developments breakthroughs 2024 2025"
   reasoning: "Testing research on current events and rapidly evolving topics"
 
-schedule:
-  type: "on_demand"
-
 validation:
   type: "llm-judge"
   llm_judge:
     model: "gpt-4.1-mini"
+    temperature: 0.3
     include_url: true
     criteria:
       - "Research focuses on recent developments (within last 6 months)"
@@ -33,7 +33,8 @@ validation:
 
 metadata:
   tags: ["current-events", "ai", "dynamic", "trends"]
-  priority: "normal"
+  priority: "high"
   timeout: 240000
   retries: 1
   flaky: true
+  owner: "devtools-team"

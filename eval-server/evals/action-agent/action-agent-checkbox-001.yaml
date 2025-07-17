@@ -6,6 +6,8 @@ enabled: true
 
 target:
   url: "https://www.w3schools.com/html/tryit.asp?filename=tryhtml_checkbox"
+  wait_for: "networkidle"
+  wait_timeout: 5000
 
 tool: "action_agent"
 timeout: 45000
@@ -14,13 +16,11 @@ input:
   objective: "Click the checkbox labeled \"I have a bike\" to check it"
   reasoning: "Testing interaction with checkbox form elements"
 
-schedule:
-  type: "on_demand"
-
 validation:
   type: "llm-judge"
   llm_judge:
-    model: "gpt-4o"
+    model: "gpt-4.1-mini"
+    temperature: 0.3
     criteria:
       - "Identified the correct checkbox among multiple options"
       - "Used click action on the checkbox element"
@@ -39,4 +39,8 @@ validation:
 
 metadata:
   tags: ["action", "checkbox", "form", "w3schools", "input"]
-  priority: "normal"
+  priority: "high"
+  timeout: 60000
+  retries: 2
+  flaky: false
+  owner: "devtools-team"

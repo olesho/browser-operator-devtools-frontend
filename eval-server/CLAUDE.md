@@ -69,9 +69,6 @@ src/
 ├── config.js          # Configuration management
 └── cli.js             # Interactive CLI for testing and management
 
-test/
-└── example-agent.js   # Example agent implementation for testing
-
 logs/                  # Log files (created automatically)
 ├── combined.log       # All log events
 ├── error.log          # Error events only

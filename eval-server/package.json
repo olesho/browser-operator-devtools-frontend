@@ -7,8 +7,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "cli": "node src/cli.js",
-    "test": "node test/example-agent.js"
+    "cli": "node src/cli.js"
   },
   "keywords": ["websocket", "llm", "evaluation", "rpc"],
   "author": "",

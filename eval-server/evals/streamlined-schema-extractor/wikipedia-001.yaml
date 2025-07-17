@@ -1,4 +1,4 @@
-# Schema extraction from Wikipedia
+# Wikipedia article extraction test (Streamlined)
 id: "wikipedia-chrome-devtools-001"
 name: "Extract Chrome DevTools Wikipedia Article"
 description: "Extract structured information from the Chrome DevTools Wikipedia page"
@@ -9,7 +9,7 @@ target:
   wait_for: "networkidle"
   wait_timeout: 5000
 
-tool: "extract_schema_data"
+tool: "extract_schema_streamlined"
 timeout: 45000
 
 input:
@@ -51,13 +51,14 @@ input:
   instruction: "Extract the main article information including title, summary, table of contents, and infobox details"
   reasoning: "Testing extraction from a stable, well-structured Wikipedia page"
 
-schedule:
-  type: "on_demand"
-
 validation:
   type: "hybrid"
+  snapshot:
+    exclude_paths:
+      - "externalLinks[*].url"
+    structure_only: false
   llm_judge:
-    model: "gpt-4o-mini"
+    model: "gpt-4.1-mini"
     temperature: 0.3
     criteria:
       - "Article title matches the Wikipedia page title"
@@ -65,15 +66,11 @@ validation:
       - "Table of contents includes major sections"
       - "Infobox contains key technical details"
       - "External links are properly resolved URLs"
-  snapshot:
-    exclude_paths:
-      - "externalLinks[*].url"
-    structure_only: false
-  hybrid:
-    weight_llm: 0.7
-    weight_snapshot: 0.3
 
 metadata:
-  tags: ["wikipedia", "documentation", "stable", "schema-extraction"]
+  tags: ["wikipedia", "documentation", "stable"]
   priority: "high"
+  timeout: 45000
+  retries: 2
+  flaky: false
   owner: "devtools-team"

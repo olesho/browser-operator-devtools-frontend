@@ -6,22 +6,22 @@ enabled: true
 
 target:
   url: "https://www.google.com"
+  wait_for: "networkidle"
+  wait_timeout: 5000
 
 tool: "action_agent"
-timeout: 60000
+timeout: 90000
 
 input:
   objective: "Type \"DevTools automation\" in the search box and then click the \"Google Search\" button"
   reasoning: "Testing multi-step interaction: text input followed by button click"
   hint: "First fill the search input field, then find and click the search button"
 
-schedule:
-  type: "on_demand"
-
 validation:
   type: "llm-judge"
   llm_judge:
-    model: "gpt-4o"
+    model: "gpt-4.1-mini"
+    temperature: 0.3
     criteria:
       - "Successfully located the search input field"
       - "Entered \"DevTools automation\" text in the search box"
@@ -41,3 +41,7 @@ validation:
 metadata:
   tags: ["action", "multi-step", "search", "form-fill", "click", "google", "basic"]
   priority: "high"
+  timeout: 90000
+  retries: 2
+  flaky: false
+  owner: "devtools-team"

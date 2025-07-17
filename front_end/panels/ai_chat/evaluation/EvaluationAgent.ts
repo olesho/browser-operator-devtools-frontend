@@ -166,7 +166,7 @@ export class EvaluationAgent {
         logger.warn('Unknown message type:', message);
       }
     } catch (error) {
-      logger.error('Error handling message:', error);
+      logger.error('Error handling message:', error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -315,8 +315,47 @@ export class EvaluationAgent {
       if (params.url) {
         this.sendStatus(params.evaluationId, 'running', 0.2, 'Navigating to URL...');
         
-        // Note: Page navigation would be handled here if needed
-        // For now, we assume the evaluation runs on the current page
+        try {
+          // Use the correct navigate_url tool from registry
+          const navigateUrlTool = ToolRegistry.getRegisteredTool('navigate_url');
+          if (navigateUrlTool) {
+            logger.info('Navigating to URL using navigate_url tool', { url: params.url });
+            const navigationResult = await this.executeToolWithTimeout(
+              navigateUrlTool,
+              { 
+                url: params.url,
+                reasoning: `Navigate to ${params.url} for evaluation ${params.evaluationId}`
+              },
+              15000 // 15 second timeout for navigation
+            );
+            logger.info('Navigation result', { navigationResult });
+            this.sendStatus(params.evaluationId, 'running', 0.3, 'Navigation completed successfully');
+          } else {
+            // Fallback: try action_agent for navigation
+            const actionTool = ToolRegistry.getRegisteredTool('action_agent');
+            if (actionTool) {
+              logger.info('Navigating to URL using action_agent fallback', { url: params.url });
+              const navigationResult = await this.executeToolWithTimeout(
+                actionTool,
+                { 
+                  task: `Navigate to ${params.url}`,
+                  reasoning: 'Navigation required for evaluation'
+                },
+                15000 // 15 second timeout for navigation
+              );
+              logger.info('Action agent navigation result', { navigationResult });
+              this.sendStatus(params.evaluationId, 'running', 0.3, 'Navigation completed via action agent');
+            } else {
+              logger.error('No navigation tools available in registry');
+              this.sendStatus(params.evaluationId, 'running', 0.3, 'ERROR: No navigation tools available');
+              throw new Error('Navigation failed: No navigation tools available');
+            }
+          }
+        } catch (error) {
+          logger.error('Navigation failed', { url: params.url, error: error instanceof Error ? error.message : error });
+          this.sendStatus(params.evaluationId, 'running', 0.3, `Navigation failed: ${error instanceof Error ? error.message : 'Unknown error'} - continuing with current page`);
+          // Continue with evaluation even if navigation fails, but log the issue prominently
+        }
       }
 
       // Execute the tool
@@ -362,10 +401,7 @@ export class EvaluationAgent {
       const executionTime = Date.now() - startTime;
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 
-      logger.error('Evaluation failed', {
-        evaluationId: params.evaluationId,
-        error: errorMessage
-      });
+      logger.error(`Evaluation failed: ${errorMessage} (evaluationId: ${params.evaluationId})`);
 
       // Send JSON-RPC error response
       const rpcResponse = createErrorResponse(

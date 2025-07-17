@@ -6,6 +6,8 @@ enabled: true
 
 target:
   url: "https://the-internet.herokuapp.com/hovers"
+  wait_for: "networkidle"
+  wait_timeout: 5000
 
 tool: "action_agent"
 timeout: 60000
@@ -14,13 +16,11 @@ input:
   objective: "Hover over the first user avatar image to reveal the hidden caption"
   reasoning: "Testing hover interaction to reveal dynamic content"
 
-schedule:
-  type: "on_demand"
-
 validation:
   type: "llm-judge"
   llm_judge:
-    model: "gpt-4o"
+    model: "gpt-4.1-mini"
+    temperature: 0.3
     criteria:
       - "Located the first user avatar image"
       - "Used appropriate hover action method"
@@ -39,4 +39,8 @@ validation:
 
 metadata:
   tags: ["action", "hover", "mouse", "dynamic", "reveal"]
-  priority: "normal"
+  priority: "high"
+  timeout: 60000
+  retries: 2
+  flaky: false
+  owner: "devtools-team"

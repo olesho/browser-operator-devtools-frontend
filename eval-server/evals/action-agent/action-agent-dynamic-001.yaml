@@ -6,6 +6,8 @@ enabled: true
 
 target:
   url: "https://the-internet.herokuapp.com/dynamic_loading/1"
+  wait_for: "networkidle"
+  wait_timeout: 5000
 
 tool: "action_agent"
 timeout: 90000
@@ -14,13 +16,11 @@ input:
   objective: "Click the \"Start\" button to trigger dynamic content loading"
   reasoning: "Testing interaction with dynamically loaded content"
 
-schedule:
-  type: "on_demand"
-
 validation:
   type: "llm-judge"
   llm_judge:
-    model: "gpt-4o"
+    model: "gpt-4.1-mini"
+    temperature: 0.3
     criteria:
       - "Found and clicked the Start button"
       - "Handled the dynamic loading process"
@@ -40,3 +40,7 @@ validation:
 metadata:
   tags: ["action", "dynamic", "click", "ajax", "loading"]
   priority: "high"
+  timeout: 90000
+  retries: 2
+  flaky: false
+  owner: "devtools-team"
