@@ -7,6 +7,8 @@ import { getEvaluationConfig, getEvaluationClientId } from '../common/Evaluation
 import { ToolRegistry } from '../agent_framework/ConfigurableAgentTool.js';
 import { AgentService } from '../core/AgentService.js';
 import { createLogger } from '../core/Logger.js';
+import { createTracingProvider, withTracingContext, isTracingEnabled, getTracingConfig } from '../tracing/TracingConfig.js';
+import type { TracingProvider, TracingContext } from '../tracing/TracingProvider.js';
 import {
   RegisterMessage,
   ReadyMessage,
@@ -50,11 +52,20 @@ export class EvaluationAgent {
   private authPromise: Promise<void> | null = null;
   private authResolve: ((value?: void) => void) | null = null;
   private authReject: ((reason?: any) => void) | null = null;
+  private tracingProvider: TracingProvider;
 
   constructor(options: EvaluationAgentOptions) {
     this.clientId = options.clientId;
     this.endpoint = options.endpoint;
     this.secretKey = options.secretKey;
+    this.tracingProvider = createTracingProvider();
+    
+    logger.info('EvaluationAgent created with tracing provider', {
+      clientId: this.clientId,
+      providerType: this.tracingProvider.constructor.name,
+      tracingEnabled: isTracingEnabled(),
+      tracingConfig: getTracingConfig()
+    });
   }
 
   public async connect(): Promise<void> {
@@ -301,6 +312,51 @@ export class EvaluationAgent {
       tool: params.tool
     });
 
+    // Create a trace for this evaluation
+    const traceId = `eval-${params.evaluationId}-${Date.now()}`;
+    const sessionId = `eval-session-${Date.now()}`;
+    const tracingContext: TracingContext = { 
+      traceId, 
+      sessionId,
+      parentObservationId: undefined 
+    };
+    
+    try {
+      // Initialize tracing provider if not already done
+      await this.tracingProvider.initialize();
+      
+      // Create session for this evaluation
+      await this.tracingProvider.createSession(sessionId, {
+        type: 'evaluation',
+        source: 'evaluation-server',
+        evaluationId: params.evaluationId
+      });
+      
+      // Create root trace for the evaluation
+      await this.tracingProvider.createTrace(
+        traceId,
+        sessionId,
+        `Evaluation: ${params.tool}`,
+        params.input,
+        {
+          evaluationId: params.evaluationId,
+          tool: params.tool,
+          url: params.url,
+          source: 'evaluation-server'
+        },
+        'evaluation-agent',
+        ['evaluation', params.tool]
+      );
+      
+      logger.info('Trace created successfully for evaluation', {
+        traceId,
+        sessionId,
+        evaluationId: params.evaluationId
+      });
+    } catch (error) {
+      logger.warn('Failed to create trace:', error);
+    }
+
     try {
       // Send status update
       this.sendStatus(params.evaluationId, 'running', 0.1, 'Starting evaluation...');
@@ -326,7 +382,9 @@ export class EvaluationAgent {
                 url: params.url,
                 reasoning: `Navigate to ${params.url} for evaluation ${params.evaluationId}`
               },
-              15000 // 15 second timeout for navigation
+              15000, // 15 second timeout for navigation
+              tracingContext,
+              'navigate_url'
             );
             logger.info('Navigation result', { navigationResult });
             this.sendStatus(params.evaluationId, 'running', 0.3, 'Navigation completed successfully');
@@ -341,7 +399,9 @@ export class EvaluationAgent {
                   task: `Navigate to ${params.url}`,
                   reasoning: 'Navigation required for evaluation'
                 },
-                15000 // 15 second timeout for navigation
+                15000, // 15 second timeout for navigation
+                tracingContext,
+                'action_agent'
               );
               logger.info('Action agent navigation result', { navigationResult });
               this.sendStatus(params.evaluationId, 'running', 0.3, 'Navigation completed via action agent');
@@ -364,7 +424,9 @@ export class EvaluationAgent {
       const toolResult = await this.executeToolWithTimeout(
         tool,
         params.input,
-        params.timeout || 30000
+        params.timeout || 30000,
+        tracingContext,
+        params.tool
       );
 
       const executionTime = Date.now() - startTime;
@@ -391,6 +453,20 @@ export class EvaluationAgent {
       }
 
       this.sendStatus(params.evaluationId, 'completed', 1.0, 'Evaluation completed successfully');
+
+      // Update trace with success
+      try {
+        await this.tracingProvider.finalizeTrace(traceId, {
+          output: toolResult,
+          statusMessage: 'completed',
+          metadata: {
+            executionTime,
+            evaluationId: params.evaluationId
+          }
+        });
+      } catch (error) {
+        logger.warn('Failed to update trace:', error);
+      }
 
       logger.info('Evaluation completed successfully', {
         evaluationId: params.evaluationId,
@@ -422,6 +498,20 @@ export class EvaluationAgent {
 
       this.sendStatus(params.evaluationId, 'failed', 1.0, errorMessage);
 
+      // Update trace with error
+      try {
+        await this.tracingProvider.finalizeTrace(traceId, {
+          error: errorMessage,
+          statusMessage: 'failed',
+          metadata: {
+            executionTime,
+            evaluationId: params.evaluationId
+          }
+        });
+      } catch (updateError) {
+        logger.warn('Failed to update trace with error:', updateError);
+      }
+
     } finally {
       this.activeEvaluations.delete(params.evaluationId);
     }
@@ -430,20 +520,74 @@ export class EvaluationAgent {
   private async executeToolWithTimeout(
     tool: any,
     input: any,
-    timeout: number
+    timeout: number,
+    tracingContext?: TracingContext,
+    toolName?: string
   ): Promise<any> {
+    const spanId = `tool-exec-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const startTime = new Date();
+    
+    // Create tool execution span if tracing context is provided
+    if (tracingContext) {
+      try {
+        await this.tracingProvider.createObservation({
+          id: spanId,
+          name: `Tool: ${toolName || 'unknown'}`,
+          type: 'span',
+          startTime,
+          input,
+          metadata: {
+            tool: toolName,
+            timeout
+          }
+        }, tracingContext.traceId);
+      } catch (error) {
+        logger.warn('Failed to create tool execution span:', error);
+      }
+    }
+    
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
+        // Update span with timeout error
+        if (tracingContext) {
+          this.tracingProvider.updateObservation(spanId, {
+            endTime: new Date(),
+            error: `Tool execution timeout after ${timeout}ms`
+          }).catch(err => logger.warn('Failed to update span with timeout:', err));
+        }
         reject(new Error(`Tool execution timeout after ${timeout}ms`));
       }, timeout);
 
-      tool.execute(input)
+      // Execute tool with tracing context if available
+      const executePromise = tracingContext 
+        ? withTracingContext(tracingContext, () => tool.execute(input))
+        : tool.execute(input);
+      
+      executePromise
         .then((result: any) => {
           clearTimeout(timer);
+          
+          // Update span with success
+          if (tracingContext) {
+            this.tracingProvider.updateObservation(spanId, {
+              endTime: new Date(),
+              output: result
+            }).catch(err => logger.warn('Failed to update span with result:', err));
+          }
+          
           resolve(result);
         })
         .catch((error: Error) => {
           clearTimeout(timer);
+          
+          // Update span with error
+          if (tracingContext) {
+            this.tracingProvider.updateObservation(spanId, {
+              endTime: new Date(),
+              error: error.message
+            }).catch(err => logger.warn('Failed to update span with error:', err));
+          }
+          
           reject(error);
         });
     });
