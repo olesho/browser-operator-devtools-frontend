@@ -31,9 +31,9 @@ const DEFAULT_RETRY_CONFIG: RetryConfig = {
  */
 const ERROR_SPECIFIC_RETRY_CONFIGS: ErrorRetryConfig = {
   [ErrorType.RATE_LIMIT_ERROR]: {
-    maxRetries: 1,
-    baseDelayMs: 2000, // 2 seconds for rate limits
-    maxDelayMs: 10000, // Max 10 seconds
+    maxRetries: 3,
+    baseDelayMs: 60000, // 60 seconds for rate limits
+    maxDelayMs: 300000, // Max 5 minutes
     backoffMultiplier: 1, // No exponential backoff for rate limits
     jitterMs: 1000, // Small jitter to avoid thundering herd
   },
