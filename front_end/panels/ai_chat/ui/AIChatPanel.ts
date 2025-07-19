@@ -17,6 +17,7 @@ import { LiteLLMProvider } from '../LLM/LiteLLMProvider.js';
 import { GroqProvider } from '../LLM/GroqProvider.js';
 import { OpenRouterProvider } from '../LLM/OpenRouterProvider.js';
 import { createLogger } from '../core/Logger.js';
+import { isEvaluationEnabled, connectToEvaluationService } from '../common/EvaluationConfig.js';
 
 const logger = createLogger('AIChatPanel');
 
@@ -515,6 +516,7 @@ export class AIChatPanel extends UI.Panel.Panel {
     this.#setupUI();
     this.#setupInitialState();
     this.#initializeAgentService();
+    this.#initializeEvaluationService();
     this.performUpdate();
     this.#fetchLiteLLMModelsOnLoad();
   }
@@ -823,6 +825,21 @@ export class AIChatPanel extends UI.Panel.Panel {
         modelOption?.value === '_placeholder_no_models'
       ),
     };
+  }
+
+  /**
+   * Initialize the evaluation service if enabled
+   */
+  async #initializeEvaluationService(): Promise<void> {
+    if (isEvaluationEnabled()) {
+      try {
+        await connectToEvaluationService();
+        logger.info('Auto-connected to evaluation service on panel initialization');
+      } catch (error) {
+        logger.error('Failed to auto-connect to evaluation service:', error);
+        // Don't throw - evaluation connection failure shouldn't break the panel
+      }
+    }
   }
 
   /**

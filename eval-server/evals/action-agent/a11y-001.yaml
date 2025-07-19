@@ -1,5 +1,5 @@
 # Accessibility action test
-id: "action-agent-a11y-001"
+id: "a11y-001"
 name: "Click Using ARIA Label"
 description: "Test clicking an element identified primarily by ARIA attributes"
 enabled: true

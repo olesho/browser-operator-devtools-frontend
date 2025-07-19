@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 import * as i18n from '../../../../core/i18n/i18n.js';
+import * as Switch from '../../../../ui/components/switch/switch.js';
 import { getEvaluationConfig, setEvaluationConfig, isEvaluationEnabled, connectToEvaluationService, disconnectFromEvaluationService, getEvaluationClientId, isEvaluationConnected } from '../../common/EvaluationConfig.js';
 import { createLogger } from '../../core/Logger.js';
 
@@ -68,22 +69,27 @@ export class EvaluationConfig {
     // Get current evaluation configuration
     const currentEvaluationConfig = getEvaluationConfig();
 
-    // Evaluation enabled checkbox
+    // Evaluation enabled toggle switch
     const evaluationEnabledContainer = document.createElement('div');
     evaluationEnabledContainer.className = 'evaluation-enabled-container';
+    evaluationEnabledContainer.style.display = 'flex';
+    evaluationEnabledContainer.style.alignItems = 'center';
+    evaluationEnabledContainer.style.gap = '8px';
     evaluationSection.appendChild(evaluationEnabledContainer);
 
-    const evaluationEnabledCheckbox = document.createElement('input');
-    evaluationEnabledCheckbox.type = 'checkbox';
-    evaluationEnabledCheckbox.id = 'evaluation-enabled';
-    evaluationEnabledCheckbox.className = 'evaluation-checkbox';
-    evaluationEnabledCheckbox.checked = isEvaluationEnabled();
-    evaluationEnabledContainer.appendChild(evaluationEnabledCheckbox);
+    const evaluationEnabledSwitch = new Switch.Switch.Switch();
+    evaluationEnabledSwitch.checked = isEvaluationEnabled();
+    evaluationEnabledSwitch.jslogContext = 'evaluation-enabled';
+    evaluationEnabledContainer.appendChild(evaluationEnabledSwitch);
 
     const evaluationEnabledLabel = document.createElement('label');
-    evaluationEnabledLabel.htmlFor = 'evaluation-enabled';
     evaluationEnabledLabel.className = 'evaluation-label';
     evaluationEnabledLabel.textContent = i18nString(UIStrings.evaluationEnabled);
+    evaluationEnabledLabel.style.cursor = 'pointer';
+    evaluationEnabledLabel.addEventListener('click', () => {
+      evaluationEnabledSwitch.checked = !evaluationEnabledSwitch.checked;
+      evaluationEnabledSwitch.dispatchEvent(new Switch.Switch.SwitchChangeEvent(evaluationEnabledSwitch.checked));
+    });
     evaluationEnabledContainer.appendChild(evaluationEnabledLabel);
 
     const evaluationEnabledHint = document.createElement('div');
@@ -139,7 +145,7 @@ export class EvaluationConfig {
     // Evaluation configuration container (shown when enabled)
     const evaluationConfigContainer = document.createElement('div');
     evaluationConfigContainer.className = 'evaluation-config-container';
-    evaluationConfigContainer.style.display = evaluationEnabledCheckbox.checked ? 'block' : 'none';
+    evaluationConfigContainer.style.display = evaluationEnabledSwitch.checked ? 'block' : 'none';
     evaluationSection.appendChild(evaluationConfigContainer);
 
     // Client ID display (read-only)
@@ -205,8 +211,9 @@ export class EvaluationConfig {
     evaluationConfigContainer.appendChild(connectionStatusMessage);
 
     // Auto-connect when evaluation is enabled/disabled
-    evaluationEnabledCheckbox.addEventListener('change', async () => {
-      const isEnabled = evaluationEnabledCheckbox.checked;
+    evaluationEnabledSwitch.addEventListener(Switch.Switch.SwitchChangeEvent.eventName, async (event: Event) => {
+      const switchEvent = event as Switch.Switch.SwitchChangeEvent;
+      const isEnabled = switchEvent.checked;
       evaluationConfigContainer.style.display = isEnabled ? 'block' : 'none';
       
       // Show connection status
@@ -248,8 +255,8 @@ export class EvaluationConfig {
           connectionStatusMessage.style.backgroundColor = 'var(--color-accent-red-background)';
           connectionStatusMessage.style.color = 'var(--color-accent-red)';
           
-          // Uncheck the checkbox if connection failed
-          evaluationEnabledCheckbox.checked = false;
+          // Uncheck the switch if connection failed
+          evaluationEnabledSwitch.checked = false;
           evaluationConfigContainer.style.display = 'none';
         }
       } else {
@@ -289,7 +296,7 @@ export class EvaluationConfig {
 
     // Return configuration data getter
     return {
-      get enabled() { return evaluationEnabledCheckbox.checked; },
+      get enabled() { return evaluationEnabledSwitch.checked; },
       get endpoint() { return evaluationEndpointInput.value.trim() || 'ws://localhost:8080'; },
       get secretKey() { return evaluationSecretKeyInput.value.trim(); }
     };

@@ -1,5 +1,5 @@
 # Basic research test - stable topic with clear sources
-id: "research-agent-basic-001"
+id: "basic-001"
 name: "Research Chrome DevTools History"
 description: "Research the history and development of Chrome DevTools"
 enabled: true

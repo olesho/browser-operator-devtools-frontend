@@ -106,6 +106,7 @@ devtools_module("ai_chat") {
     "../../ui/components/helpers:bundle",
     "../../ui/components/markdown_view:bundle",
     "../../ui/components/snackbars:bundle",
+    "../../ui/components/switch:bundle",
     "../../ui/components/text_editor:bundle",
     "../../ui/legacy:bundle",
     "../../ui/lit:bundle",

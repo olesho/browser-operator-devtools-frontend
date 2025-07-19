@@ -1,5 +1,5 @@
 # Accordion expansion test
-id: "action-agent-accordion-001"
+id: "accordion-001"
 name: "Expand Accordion Section"
 description: "Test clicking to expand an accordion panel"
 enabled: true
