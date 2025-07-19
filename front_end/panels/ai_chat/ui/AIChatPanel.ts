@@ -262,6 +262,13 @@ export class AIChatPanel extends UI.Panel.Panel {
   }
 
   static getProviderForModel(modelName: string): 'openai' | 'litellm' | 'groq' | 'openrouter' {
+    // Check for evaluation-specific provider override first
+    const evaluationProvider = localStorage.getItem('ai_chat_evaluation_provider');
+    if (evaluationProvider && ['openai', 'litellm', 'groq', 'openrouter'].includes(evaluationProvider)) {
+      return evaluationProvider as 'openai' | 'litellm' | 'groq' | 'openrouter';
+    }
+    
+    // Fall back to existing model options lookup
     const allModelOptions = AIChatPanel.getModelOptions();
     const modelOption = allModelOptions.find(option => option.value === modelName);
     return (modelOption?.type as 'openai' | 'litellm' | 'groq' | 'openrouter') || 'openai';

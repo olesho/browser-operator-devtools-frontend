@@ -10,7 +10,10 @@ timeout: 600000
 input:
   message: "Research everything on the supplementation of B-vitamins for adults. I need: types of vitamins, available forms and their advantages, dosage and safety"
   reasoning: "End-to-end test validating complete user workflow with dynamic tool usage for health research"
-  ai_chat_model: "gpt-4.1-mini"
+  main_model: "qwen3:14b"
+  mini_model: "qwen3:14b"
+  nano_model: "qwen3:14b"
+  provider: "litellm"
 
 validation:
   type: "llm_judge"

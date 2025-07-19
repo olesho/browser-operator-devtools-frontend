@@ -15,7 +15,10 @@ timeout: 300000
 input:
   message: "Compare the top 3 noise-canceling headphones under $300. Include features, pros/cons, and where to buy them."
   reasoning: "End-to-end test validating product comparison workflow with dynamic tool usage"
-  ai_chat_model: "gpt-4o"
+  main_model: "gpt-4o"
+  mini_model: "gpt-4.1-mini"
+  nano_model: "gpt-4.1-nano"
+  provider: "openai"
 
 validation:
   type: "llm_judge"

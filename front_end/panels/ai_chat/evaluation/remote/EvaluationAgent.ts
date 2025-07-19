@@ -41,6 +41,13 @@ export interface EvaluationAgentOptions {
   secretKey?: string;
 }
 
+interface ModelBackup {
+  mainModel: string | null;
+  miniModel: string | null;
+  nanoModel: string | null;
+  provider: string | null;
+}
+
 export class EvaluationAgent {
   private client: WebSocketRPCClient | null = null;
   private clientId: string;
@@ -659,19 +666,96 @@ export class EvaluationAgent {
     return Array.from(this.activeEvaluations.keys());
   }
 
+  /**
+   * Backup current model settings from localStorage
+   */
+  private backupCurrentModels(): ModelBackup {
+    return {
+      mainModel: localStorage.getItem('ai_chat_model_selection'),
+      miniModel: localStorage.getItem('ai_chat_mini_model'),
+      nanoModel: localStorage.getItem('ai_chat_nano_model'),
+      provider: localStorage.getItem('ai_chat_evaluation_provider')
+    };
+  }
+
+  /**
+   * Set evaluation-specific models in localStorage
+   */
+  private setEvaluationModels(input: any): void {
+    if (input.main_model) {
+      localStorage.setItem('ai_chat_model_selection', input.main_model);
+    }
+    if (input.mini_model) {
+      localStorage.setItem('ai_chat_mini_model', input.mini_model);
+    }
+    if (input.nano_model) {
+      localStorage.setItem('ai_chat_nano_model', input.nano_model);
+    }
+    if (input.provider) {
+      localStorage.setItem('ai_chat_evaluation_provider', input.provider);
+    }
+  }
+
+  /**
+   * Restore backed up model settings to localStorage
+   */
+  private restoreBackedUpModels(backup: ModelBackup): void {
+    // Restore main model
+    if (backup.mainModel) {
+      localStorage.setItem('ai_chat_model_selection', backup.mainModel);
+    } else {
+      localStorage.removeItem('ai_chat_model_selection');
+    }
+
+    // Restore mini model
+    if (backup.miniModel) {
+      localStorage.setItem('ai_chat_mini_model', backup.miniModel);
+    } else {
+      localStorage.removeItem('ai_chat_mini_model');
+    }
+
+    // Restore nano model
+    if (backup.nanoModel) {
+      localStorage.setItem('ai_chat_nano_model', backup.nanoModel);
+    } else {
+      localStorage.removeItem('ai_chat_nano_model');
+    }
+
+    // Restore provider
+    if (backup.provider) {
+      localStorage.setItem('ai_chat_evaluation_provider', backup.provider);
+    } else {
+      localStorage.removeItem('ai_chat_evaluation_provider');
+    }
+  }
+
   private async executeChatEvaluation(
     input: any,
     timeout: number,
     tracingContext?: TracingContext
   ): Promise<any> {
+    // TODO: TECH_DEBT - Replace localStorage manipulation with proper model configuration API
+    // This approach directly modifies localStorage which is fragile and couples evaluation 
+    // logic to UI state management. Future improvement should pass model configs directly 
+    // to AgentService without affecting global UI state.
+    
     // Validate input
     if (!input.message) {
       throw new Error('Chat evaluation requires input.message');
     }
     
+    // Backup current models before overriding
+    const modelBackup = this.backupCurrentModels();
+    
     logger.info('Starting chat evaluation', {
       message: input.message,
-      modelOverride: input.ai_chat_model,
+      modelOverride: {
+        main: input.main_model || input.ai_chat_model, // Support both old and new format
+        mini: input.mini_model,
+        nano: input.nano_model,
+        provider: input.provider
+      },
+      originalModels: modelBackup,
       timeout,
       hasTracingContext: !!tracingContext
     });
@@ -684,14 +768,18 @@ export class EvaluationAgent {
       let chatObservationId: string | undefined;
 
       try {
+        // Set evaluation-specific models if provided
+        this.setEvaluationModels(input);
+        
         // Get or create AgentService instance
         const agentService = AgentService.getInstance();
         
         // Get the model to use - priority: test-specific > stored config > default
-        let modelName = input.ai_chat_model;
+        // Support both new format (main_model) and old format (ai_chat_model) for backward compatibility
+        let modelName = input.main_model || input.ai_chat_model;
         if (!modelName) {
-          // Try to get from localStorage
-          modelName = localStorage.getItem('ai_chat_model');
+          // Try to get from localStorage (now potentially updated by setEvaluationModels)
+          modelName = localStorage.getItem('ai_chat_model_selection');
           if (!modelName) {
             // Default model
             modelName = 'gpt-4o';
@@ -764,9 +852,16 @@ export class EvaluationAgent {
           timestamp: new Date().toISOString(),
           evaluationMetadata: {
             evaluationType: 'chat',
-            modelOverride: input.ai_chat_model,
-            originalModel: input.ai_chat_model,
-            actualModelUsed: modelName
+            modelOverride: {
+              main: input.main_model || input.ai_chat_model,
+              mini: input.mini_model,
+              nano: input.nano_model,
+              provider: input.provider
+            },
+            originalModel: input.main_model || input.ai_chat_model, // For backward compatibility
+            actualModelUsed: modelName,
+            providerUsed: input.provider,
+            modelsBackedUp: modelBackup
           }
         };
         
@@ -774,7 +869,7 @@ export class EvaluationAgent {
           responseLength: responseText.length,
           messageCount: result.messages.length,
           modelUsed: modelName,
-          requestedModel: input.ai_chat_model,
+          requestedModel: input.main_model || input.ai_chat_model,
           evaluationId: tracingContext?.traceId
         });
         
@@ -798,6 +893,14 @@ export class EvaluationAgent {
         logger.error('Chat evaluation failed:', error);
         
         reject(error);
+      } finally {
+        // Always restore the original models after evaluation (success or failure)
+        this.restoreBackedUpModels(modelBackup);
+        
+        logger.info('Restored original model configuration after evaluation', {
+          restoredModels: modelBackup,
+          evaluationId: tracingContext?.traceId
+        });
       }
     });
   }

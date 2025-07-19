@@ -10,7 +10,10 @@ timeout: 600000
 input:
   message: "Research renewable energy stocks for potential investment. Focus on solar and wind companies with market cap over $1B."
   reasoning: "End-to-end test validating financial research workflow with dynamic tool usage"
-  ai_chat_model: "gpt-4.1-nano"
+  main_model: "gpt-4.1-nano"
+  mini_model: "gpt-4.1-nano"
+  nano_model: "gpt-4.1-nano"
+  provider: "openai"
 
 validation:
   type: "llm_judge"
