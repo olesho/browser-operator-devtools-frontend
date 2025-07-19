@@ -2,13 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import { WebSocketRPCClient } from '../common/WebSocketRPCClient.js';
-import { getEvaluationConfig, getEvaluationClientId } from '../common/EvaluationConfig.js';
-import { ToolRegistry } from '../agent_framework/ConfigurableAgentTool.js';
-import { AgentService } from '../core/AgentService.js';
-import { createLogger } from '../core/Logger.js';
-import { createTracingProvider, withTracingContext, isTracingEnabled, getTracingConfig } from '../tracing/TracingConfig.js';
-import type { TracingProvider, TracingContext } from '../tracing/TracingProvider.js';
+import { WebSocketRPCClient } from '../../common/WebSocketRPCClient.js';
+import { getEvaluationConfig, getEvaluationClientId } from '../../common/EvaluationConfig.js';
+import { ToolRegistry } from '../../agent_framework/ConfigurableAgentTool.js';
+import { AgentService } from '../../core/AgentService.js';
+import { createLogger } from '../../core/Logger.js';
+import { createTracingProvider, withTracingContext, isTracingEnabled, getTracingConfig } from '../../tracing/TracingConfig.js';
+import type { TracingProvider, TracingContext } from '../../tracing/TracingProvider.js';
+import type { ChatMessage } from '../../ui/ChatView.js';
 import {
   RegisterMessage,
   ReadyMessage,
@@ -303,7 +304,9 @@ export class EvaluationAgent {
     logger.info('Received evaluation request', {
       evaluationId: params.evaluationId,
       tool: params.tool,
-      url: params.url
+      url: params.url,
+      isChat: params.tool === 'chat',
+      modelOverride: params.input?.ai_chat_model
     });
 
     // Track active evaluation
@@ -361,10 +364,13 @@ export class EvaluationAgent {
       // Send status update
       this.sendStatus(params.evaluationId, 'running', 0.1, 'Starting evaluation...');
 
-      // Get the tool from registry
-      const tool = ToolRegistry.getRegisteredTool(params.tool);
-      if (!tool) {
-        throw new Error(`Tool not found: ${params.tool}`);
+      // Get the tool from registry (only for non-chat evaluations)
+      let tool: any = null;
+      if (params.tool !== 'chat') {
+        tool = ToolRegistry.getRegisteredTool(params.tool);
+        if (!tool) {
+          throw new Error(`Tool not found: ${params.tool}`);
+        }
       }
 
       // Navigate to URL if needed
@@ -418,16 +424,30 @@ export class EvaluationAgent {
         }
       }
 
-      // Execute the tool
-      this.sendStatus(params.evaluationId, 'running', 0.5, `Executing ${params.tool}...`);
+      // Check if this is a chat evaluation that needs AgentService
+      let toolResult: any;
       
-      const toolResult = await this.executeToolWithTimeout(
-        tool,
-        params.input,
-        params.timeout || 30000,
-        tracingContext,
-        params.tool
-      );
+      if (params.tool === 'chat') {
+        // Handle chat evaluations using AgentService
+        this.sendStatus(params.evaluationId, 'running', 0.5, 'Processing chat request...');
+        
+        toolResult = await this.executeChatEvaluation(
+          params.input,
+          params.timeout || 300000, // Default 5 minutes for chat
+          tracingContext
+        );
+      } else {
+        // Execute regular tool evaluation
+        this.sendStatus(params.evaluationId, 'running', 0.5, `Executing ${params.tool}...`);
+        
+        toolResult = await this.executeToolWithTimeout(
+          tool,
+          params.input,
+          params.timeout || 30000,
+          tracingContext,
+          params.tool
+        );
+      }
 
       const executionTime = Date.now() - startTime;
 
@@ -637,6 +657,149 @@ export class EvaluationAgent {
 
   public getActiveEvaluations(): string[] {
     return Array.from(this.activeEvaluations.keys());
+  }
+
+  private async executeChatEvaluation(
+    input: any,
+    timeout: number,
+    tracingContext?: TracingContext
+  ): Promise<any> {
+    // Validate input
+    if (!input.message) {
+      throw new Error('Chat evaluation requires input.message');
+    }
+    
+    logger.info('Starting chat evaluation', {
+      message: input.message,
+      modelOverride: input.ai_chat_model,
+      timeout,
+      hasTracingContext: !!tracingContext
+    });
+    
+    return new Promise(async (resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(`Chat evaluation timeout after ${timeout}ms`));
+      }, timeout);
+
+      let chatObservationId: string | undefined;
+
+      try {
+        // Get or create AgentService instance
+        const agentService = AgentService.getInstance();
+        
+        // Get the model to use - priority: test-specific > stored config > default
+        let modelName = input.ai_chat_model;
+        if (!modelName) {
+          // Try to get from localStorage
+          modelName = localStorage.getItem('ai_chat_model');
+          if (!modelName) {
+            // Default model
+            modelName = 'gpt-4o';
+          }
+        }
+        
+        logger.info('Initializing AgentService for chat evaluation', {
+          modelName,
+          hasApiKey: !!agentService.getApiKey(),
+          isInitialized: agentService.isInitialized()
+        });
+        
+        // Always reinitialize with the evaluation-specific model to ensure
+        // the correct model is used for this evaluation
+        await agentService.initialize(agentService.getApiKey(), modelName);
+        
+        // Create a child observation for the chat execution
+        if (tracingContext) {
+          chatObservationId = `chat-exec-${Date.now()}`;
+          try {
+            await this.tracingProvider.createObservation({
+              id: chatObservationId,
+              name: 'Chat Execution',
+              type: 'span',
+              startTime: new Date(),
+              input: { message: input.message, model: modelName },
+              metadata: {
+                evaluationType: 'chat',
+                modelOverride: input.ai_chat_model
+              }
+            }, tracingContext.traceId);
+          } catch (error) {
+            logger.warn('Failed to create chat execution observation:', error);
+          }
+        }
+        
+        // Send the message with the evaluation tracing context
+        // This will allow AgentService to access the parent trace context
+        const finalMessage: ChatMessage = tracingContext 
+          ? await withTracingContext(tracingContext, () => agentService.sendMessage(input.message))
+          : await agentService.sendMessage(input.message);
+        
+        clearTimeout(timer);
+        
+        // Extract the response text from the final message
+        let responseText = '';
+        if ('answer' in finalMessage) {
+          responseText = finalMessage.answer || '';
+        } else if ('error' in finalMessage) {
+          responseText = `Error: ${finalMessage.error}`;
+        }
+        
+        // Update the chat execution observation with the result
+        if (tracingContext && chatObservationId) {
+          try {
+            await this.tracingProvider.updateObservation(chatObservationId, {
+              endTime: new Date(),
+              output: { response: responseText, messageCount: agentService.getMessages().length }
+            });
+          } catch (error) {
+            logger.warn('Failed to update chat execution observation:', error);
+          }
+        }
+        
+        // Build a response object similar to tool responses
+        const result = {
+          response: responseText,
+          messages: agentService.getMessages(),
+          modelUsed: modelName,
+          timestamp: new Date().toISOString(),
+          evaluationMetadata: {
+            evaluationType: 'chat',
+            modelOverride: input.ai_chat_model,
+            originalModel: input.ai_chat_model,
+            actualModelUsed: modelName
+          }
+        };
+        
+        logger.info('Chat evaluation completed successfully', {
+          responseLength: responseText.length,
+          messageCount: result.messages.length,
+          modelUsed: modelName,
+          requestedModel: input.ai_chat_model,
+          evaluationId: tracingContext?.traceId
+        });
+        
+        resolve(result);
+        
+      } catch (error) {
+        clearTimeout(timer);
+        
+        // Update the chat execution observation with the error
+        if (tracingContext && chatObservationId) {
+          try {
+            await this.tracingProvider.updateObservation(chatObservationId, {
+              endTime: new Date(),
+              error: error instanceof Error ? error.message : String(error)
+            });
+          } catch (updateError) {
+            logger.warn('Failed to update chat execution observation with error:', updateError);
+          }
+        }
+        
+        logger.error('Chat evaluation failed:', error);
+        
+        reject(error);
+      }
+    });
   }
 }
 
