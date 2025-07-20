@@ -177,6 +177,12 @@ function createResearchAgentConfig(): AgentToolConfig {
   return {
     name: 'research_agent',
     description: 'Performs in-depth research on a specific query autonomously using multiple steps and internal tool calls (navigation, fetching, extraction). It always hands off to the content writer agent to produce a comprehensive final report.',
+    ui: {
+      displayName: 'Research Agent',
+      avatar: '🔍',
+      color: '#3b82f6',
+      backgroundColor: '#f8fafc'
+    },
     systemPrompt: `You are a research subagent working as part of a team. You have been given a specific research task with clear requirements. Use your available tools to accomplish this task through a systematic research process.
 
 ## Understanding Your Task
@@ -370,6 +376,12 @@ function createContentWriterAgentConfig(): AgentToolConfig {
   return {
     name: 'content_writer_agent',
     description: 'Writes detailed, well-structured reports based on research data. Creates an outline and then builds a comprehensive markdown report with proper structure, citations, and detailed information.',
+    ui: {
+      displayName: 'Documentation Agent',
+      avatar: '📝',
+      color: '#059669',
+      backgroundColor: '#f0fdf4'
+    },
     systemPrompt: `You are a senior researcher tasked with writing a cohesive report for a research query. 
 You will be provided with the original query, and research data collected by a research assistant.
 

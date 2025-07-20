@@ -401,6 +401,9 @@ export class AgentService extends Common.ObjectWrapper.ObjectWrapper<{
         }
       }, traceId);
 
+      // Wait a moment for all async tracing operations to complete
+      await new Promise(resolve => setTimeout(resolve, 100));
+
       // Finalize trace with the final output
       await this.#tracingProvider.finalizeTrace(
         traceId,

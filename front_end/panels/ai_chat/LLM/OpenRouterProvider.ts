@@ -128,6 +128,12 @@ export class OpenRouterProvider extends LLMBaseProvider {
           outputTokens: data.usage.completion_tokens,
           totalTokens: data.usage.total_tokens
         });
+        
+        // Ensure usage data is preserved in rawResponse for tracing
+        if (!data.rawResponse) {
+          data.rawResponse = {};
+        }
+        data.rawResponse.usage = data.usage;
       }
 
       return data;
@@ -144,6 +150,11 @@ export class OpenRouterProvider extends LLMBaseProvider {
     const result: LLMResponse = {
       rawResponse: data
     };
+    
+    // Ensure usage data is available for tracing
+    if (data.usage && data.rawResponse) {
+      data.rawResponse.usage = data.usage;
+    }
 
     if (!data?.choices || data.choices.length === 0) {
       throw new Error('No choices in OpenRouter response');
