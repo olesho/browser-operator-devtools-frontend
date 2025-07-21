@@ -15,10 +15,6 @@ timeout: 300000
 input:
   message: "Help me plan a 3-day trip to Barcelona. I need flight options from New York, hotel recommendations in the city center, and top 5 attractions to visit."
   reasoning: "End-to-end test validating complete travel planning workflow with dynamic tool usage"
-  main_model: "gpt-4o-mini"
-  mini_model: "gpt-4.1-nano"
-  nano_model: "gpt-4.1-nano"
-  provider: "openai"
 
 validation:
   type: "llm_judge"

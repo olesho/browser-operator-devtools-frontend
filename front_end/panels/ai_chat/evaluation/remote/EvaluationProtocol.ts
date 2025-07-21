@@ -85,6 +85,12 @@ export interface EvaluationParams {
   url: string;
   tool: string;
   input: any;
+  model?: {
+    main_model?: string;
+    mini_model?: string;
+    nano_model?: string;
+    provider?: string;
+  };
   timeout: number;
   metadata: {
     tags: string[];

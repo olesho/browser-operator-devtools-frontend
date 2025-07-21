@@ -87,7 +87,9 @@ export class AgentService extends Common.ObjectWrapper.ObjectWrapper<{
     const llm = LLMClient.getInstance();
     
     // Get configuration from localStorage
-    const provider = localStorage.getItem('ai_chat_provider') || 'openai';
+    // Check for evaluation-specific provider override first
+    const provider = localStorage.getItem('ai_chat_evaluation_provider') || localStorage.getItem('ai_chat_provider') || 'openai';
+    const isEvaluationMode = !!localStorage.getItem('ai_chat_evaluation_provider');
     const openaiKey = localStorage.getItem('ai_chat_api_key') || '';
     const litellmKey = localStorage.getItem('ai_chat_litellm_api_key') || '';
     const litellmEndpoint = localStorage.getItem('ai_chat_litellm_endpoint') || '';
@@ -96,37 +98,65 @@ export class AgentService extends Common.ObjectWrapper.ObjectWrapper<{
     
     const providers = [];
     
-    // Add OpenAI if it's the selected provider and has an API key
-    if (provider === 'openai' && openaiKey) {
-      providers.push({ 
-        provider: 'openai' as const, 
-        apiKey: openaiKey 
-      });
-    }
-    
-    // Add LiteLLM if it's the selected provider and has configuration
-    if (provider === 'litellm' && litellmEndpoint) {
-      providers.push({ 
-        provider: 'litellm' as const, 
-        apiKey: litellmKey, // Can be empty for some LiteLLM endpoints
-        providerURL: litellmEndpoint 
-      });
-    }
-    
-    // Add Groq if it's the selected provider and has an API key
-    if (provider === 'groq' && groqKey) {
-      providers.push({ 
-        provider: 'groq' as const, 
-        apiKey: groqKey 
-      });
-    }
-    
-    // Add OpenRouter if it's the selected provider and has an API key
-    if (provider === 'openrouter' && openrouterKey) {
-      providers.push({ 
-        provider: 'openrouter' as const, 
-        apiKey: openrouterKey 
-      });
+    // In evaluation mode, be more permissive and register all available providers
+    // This allows evaluations to use different providers even if not currently selected
+    if (isEvaluationMode) {
+      // Add all available providers with configuration
+      if (openaiKey) {
+        providers.push({ 
+          provider: 'openai' as const, 
+          apiKey: openaiKey 
+        });
+      }
+      if (litellmEndpoint) {
+        providers.push({ 
+          provider: 'litellm' as const, 
+          apiKey: litellmKey, // Can be empty for some LiteLLM endpoints
+          providerURL: litellmEndpoint 
+        });
+      }
+      if (groqKey) {
+        providers.push({ 
+          provider: 'groq' as const, 
+          apiKey: groqKey 
+        });
+      }
+      if (openrouterKey) {
+        providers.push({ 
+          provider: 'openrouter' as const, 
+          apiKey: openrouterKey 
+        });
+      }
+    } else {
+      // Normal mode: only add the selected provider
+      if (provider === 'openai' && openaiKey) {
+        providers.push({ 
+          provider: 'openai' as const, 
+          apiKey: openaiKey 
+        });
+      }
+      
+      if (provider === 'litellm' && litellmEndpoint) {
+        providers.push({ 
+          provider: 'litellm' as const, 
+          apiKey: litellmKey, // Can be empty for some LiteLLM endpoints
+          providerURL: litellmEndpoint 
+        });
+      }
+      
+      if (provider === 'groq' && groqKey) {
+        providers.push({ 
+          provider: 'groq' as const, 
+          apiKey: groqKey 
+        });
+      }
+      
+      if (provider === 'openrouter' && openrouterKey) {
+        providers.push({ 
+          provider: 'openrouter' as const, 
+          apiKey: openrouterKey 
+        });
+      }
     }
     
     if (providers.length === 0) {
@@ -142,7 +172,12 @@ export class AgentService extends Common.ObjectWrapper.ObjectWrapper<{
     }
     
     await llm.initialize({ providers });
-    logger.info('LLM client initialized successfully');
+    logger.info('LLM client initialized successfully', {
+      selectedProvider: provider,
+      isEvaluationMode,
+      providersRegistered: providers.map(p => p.provider),
+      providersCount: providers.length
+    });
   }
 
   /**

@@ -273,6 +273,15 @@ export class AIChatPanel extends UI.Panel.Panel {
     const modelOption = allModelOptions.find(option => option.value === modelName);
     return (modelOption?.type as 'openai' | 'litellm' | 'groq' | 'openrouter') || 'openai';
   }
+
+  /**
+   * Force refresh model selections from localStorage.
+   * This is useful for evaluation scenarios where localStorage is updated programmatically.
+   */
+  static refreshModelSelections(): void {
+    const instance = AIChatPanel.instance();
+    instance.#loadModelSelections();
+  }
   
   /**
    * Gets all model options or filters by provider
@@ -633,22 +642,32 @@ export class AIChatPanel extends UI.Panel.Panel {
       localStorage.setItem(MODEL_SELECTION_KEY, this.#selectedModel);
     }
     
-    // Load mini model
+    // Load mini model - allow evaluation overrides to bypass MODEL_OPTIONS validation
     const storedMiniModel = localStorage.getItem(MINI_MODEL_STORAGE_KEY);
-    if (storedMiniModel && MODEL_OPTIONS.some(option => option.value === storedMiniModel)) {
-      this.#miniModel = storedMiniModel;
+    if (storedMiniModel) {
+      // Check if this looks like an evaluation override (non-empty value)
+      // For evaluation overrides, trust the value even if not in MODEL_OPTIONS
+      if (storedMiniModel.trim() !== '') {
+        this.#miniModel = storedMiniModel;
+      } else {
+        this.#miniModel = '';
+      }
     } else {
       this.#miniModel = '';
-      localStorage.removeItem(MINI_MODEL_STORAGE_KEY);
     }
 
-    // Load nano model
+    // Load nano model - allow evaluation overrides to bypass MODEL_OPTIONS validation  
     const storedNanoModel = localStorage.getItem(NANO_MODEL_STORAGE_KEY);
-    if (storedNanoModel && MODEL_OPTIONS.some(option => option.value === storedNanoModel)) {
-      this.#nanoModel = storedNanoModel;
+    if (storedNanoModel) {
+      // Check if this looks like an evaluation override (non-empty value)
+      // For evaluation overrides, trust the value even if not in MODEL_OPTIONS
+      if (storedNanoModel.trim() !== '') {
+        this.#nanoModel = storedNanoModel;
+      } else {
+        this.#nanoModel = '';
+      }
     } else {
       this.#nanoModel = '';
-      localStorage.removeItem(NANO_MODEL_STORAGE_KEY);
     }
     
     logger.info('Loaded model selections:', {

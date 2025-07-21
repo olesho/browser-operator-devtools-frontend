@@ -15,10 +15,6 @@ timeout: 300000
 input:
   message: "Find me 3 healthy dinner recipes for a family of 4 that are under 500 calories per serving and take less than 30 minutes to prepare."
   reasoning: "End-to-end test validating recipe search workflow with specific nutritional and time criteria"
-  main_model: "gpt-4o-mini"
-  mini_model: "gpt-4.1-nano"
-  nano_model: "gpt-4.1-nano"
-  provider: "openai"
 
 validation:
   type: "llm_judge"

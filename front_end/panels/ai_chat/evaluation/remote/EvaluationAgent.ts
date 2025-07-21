@@ -10,6 +10,7 @@ import { createLogger } from '../../core/Logger.js';
 import { createTracingProvider, withTracingContext, isTracingEnabled, getTracingConfig } from '../../tracing/TracingConfig.js';
 import type { TracingProvider, TracingContext } from '../../tracing/TracingProvider.js';
 import type { ChatMessage } from '../../ui/ChatView.js';
+import { AIChatPanel } from '../../ui/AIChatPanel.js';
 import {
   RegisterMessage,
   ReadyMessage,
@@ -313,7 +314,8 @@ export class EvaluationAgent {
       tool: params.tool,
       url: params.url,
       isChat: params.tool === 'chat',
-      modelOverride: params.input?.ai_chat_model
+      modelOverride: params.input?.ai_chat_model,
+      modelConfig: params.model
     });
 
     // Track active evaluation
@@ -438,8 +440,19 @@ export class EvaluationAgent {
         // Handle chat evaluations using AgentService
         this.sendStatus(params.evaluationId, 'running', 0.5, 'Processing chat request...');
         
+        // Merge model configuration - prefer params.model over params.input model fields
+        const mergedInput = {
+          ...params.input,
+          ...(params.model && {
+            main_model: params.model.main_model,
+            mini_model: params.model.mini_model,
+            nano_model: params.model.nano_model,
+            provider: params.model.provider
+          })
+        };
+        
         toolResult = await this.executeChatEvaluation(
-          params.input,
+          mergedInput,
           params.timeout || 300000, // Default 5 minutes for chat
           tracingContext
         );
@@ -694,6 +707,9 @@ export class EvaluationAgent {
     if (input.provider) {
       localStorage.setItem('ai_chat_evaluation_provider', input.provider);
     }
+    
+    // Refresh AIChatPanel's cached model selections
+    AIChatPanel.refreshModelSelections();
   }
 
   /**
@@ -727,6 +743,9 @@ export class EvaluationAgent {
     } else {
       localStorage.removeItem('ai_chat_evaluation_provider');
     }
+    
+    // Refresh AIChatPanel's cached model selections after restore
+    AIChatPanel.refreshModelSelections();
   }
 
   private async executeChatEvaluation(
