@@ -4,10 +4,12 @@
 
 import * as i18n from '../../../core/i18n/i18n.js';
 import * as UI from '../../../ui/legacy/legacy.js';
-import { LLMClient } from '../LLM/LLMClient.js';
+import { getEvaluationConfig, setEvaluationConfig, isEvaluationEnabled, connectToEvaluationService, disconnectFromEvaluationService, getEvaluationClientId, isEvaluationConnected } from '../common/EvaluationConfig.js';
 import { createLogger } from '../core/Logger.js';
+import { LLMClient } from '../LLM/LLMClient.js';
 import { getTracingConfig, setTracingConfig, isTracingEnabled } from '../tracing/TracingConfig.js';
-import { getEvaluationConfig, setEvaluationConfig, isEvaluationEnabled, testEvaluationConnection, connectToEvaluationService, disconnectFromEvaluationService, getEvaluationClientId, isEvaluationConnected } from '../common/EvaluationConfig.js';
+
+import { DEFAULT_PROVIDER_MODELS } from './AIChatPanel.js';
 
 const logger = createLogger('SettingsDialog');
 
@@ -19,7 +21,6 @@ interface ModelOption {
 }
 
 // Local storage keys
-const MODEL_SELECTION_KEY = 'ai_chat_model_selection';
 const MINI_MODEL_STORAGE_KEY = 'ai_chat_mini_model';
 const NANO_MODEL_STORAGE_KEY = 'ai_chat_nano_model';
 const LITELLM_ENDPOINT_KEY = 'ai_chat_litellm_endpoint';
@@ -567,6 +568,7 @@ export class SettingsDialog {
       logger.debug(`Available models for ${selectedProvider}:`, availableModels);
       logger.debug(`Current miniModel: ${miniModel}, nanoModel: ${nanoModel}`);
 
+
       // Refresh model selectors based on new provider
       if (selectedProvider === 'openai') {
         // Use our reusable function to update OpenAI model selectors
@@ -619,6 +621,10 @@ export class SettingsDialog {
       const openaiModels = getModelOptions('openai');
       logger.debug('OpenAI models from getModelOptions:', openaiModels);
 
+      // Get valid models using generic helper
+      const validMiniModel = getValidModelForProvider(miniModel, openaiModels, 'openai', 'mini');
+      const validNanoModel = getValidModelForProvider(nanoModel, openaiModels, 'openai', 'nano');
+
       // Clear any existing model selectors
       const existingSelectors = openaiContent.querySelectorAll('.model-selection-section');
       existingSelectors.forEach(selector => selector.remove());
@@ -644,7 +650,7 @@ export class SettingsDialog {
         i18nString(UIStrings.miniModelDescription),
         'mini-model-select',
         openaiModels,
-        miniModel,
+        validMiniModel,
         i18nString(UIStrings.defaultMiniOption),
         undefined // No focus handler for OpenAI
       );
@@ -658,7 +664,7 @@ export class SettingsDialog {
         i18nString(UIStrings.nanoModelDescription),
         'nano-model-select',
         openaiModels,
-        nanoModel,
+        validNanoModel,
         i18nString(UIStrings.defaultNanoOption),
         undefined // No focus handler for OpenAI
       );
@@ -854,6 +860,10 @@ export class SettingsDialog {
       const litellmModels = getModelOptions('litellm');
       logger.debug('LiteLLM models from getModelOptions:', litellmModels);
 
+      // Get valid models using generic helper
+      const validMiniModel = getValidModelForProvider(miniModel, litellmModels, 'litellm', 'mini');
+      const validNanoModel = getValidModelForProvider(nanoModel, litellmModels, 'litellm', 'nano');
+
       // Clear any existing model selectors
       const existingSelectors = litellmContent.querySelectorAll('.model-selection-section');
       existingSelectors.forEach(selector => selector.remove());
@@ -898,7 +908,7 @@ export class SettingsDialog {
         i18nString(UIStrings.miniModelDescription),
         'litellm-mini-model-select',
         litellmModels,
-        miniModel,
+        validMiniModel,
         i18nString(UIStrings.defaultMiniOption),
         onLiteLLMSelectorFocus
       );
@@ -912,7 +922,7 @@ export class SettingsDialog {
         i18nString(UIStrings.nanoModelDescription),
         'litellm-nano-model-select',
         litellmModels,
-        nanoModel,
+        validNanoModel,
         i18nString(UIStrings.defaultNanoOption),
         onLiteLLMSelectorFocus
       );
@@ -1161,6 +1171,35 @@ export class SettingsDialog {
       addModelButton.disabled = false;
     });
     
+    // Add Advanced Settings Toggle
+    const ADVANCED_SETTINGS_ENABLED_KEY = 'ai_chat_advanced_settings_enabled';
+    
+    const advancedToggleSection = document.createElement('div');
+    advancedToggleSection.className = 'advanced-settings-toggle-section';
+    contentDiv.appendChild(advancedToggleSection);
+    
+    const advancedToggleContainer = document.createElement('div');
+    advancedToggleContainer.className = 'advanced-settings-toggle-container';
+    advancedToggleSection.appendChild(advancedToggleContainer);
+    
+    const advancedToggleCheckbox = document.createElement('input');
+    advancedToggleCheckbox.type = 'checkbox';
+    advancedToggleCheckbox.id = 'advanced-settings-toggle';
+    advancedToggleCheckbox.className = 'advanced-settings-checkbox';
+    advancedToggleCheckbox.checked = localStorage.getItem(ADVANCED_SETTINGS_ENABLED_KEY) === 'true';
+    advancedToggleContainer.appendChild(advancedToggleCheckbox);
+    
+    const advancedToggleLabel = document.createElement('label');
+    advancedToggleLabel.htmlFor = 'advanced-settings-toggle';
+    advancedToggleLabel.className = 'advanced-settings-label';
+    advancedToggleLabel.textContent = '⚙️ Advanced Settings';
+    advancedToggleContainer.appendChild(advancedToggleLabel);
+    
+    const advancedToggleHint = document.createElement('div');
+    advancedToggleHint.className = 'settings-hint';
+    advancedToggleHint.textContent = 'Show advanced configuration options (Browsing History, Vector DB, Tracing, Evaluation)';
+    advancedToggleSection.appendChild(advancedToggleHint);
+    
     // Add browsing history section
     const historySection = document.createElement('div');
     historySection.className = 'settings-section history-section';
@@ -1257,6 +1296,28 @@ export class SettingsDialog {
       fetchGroqModelsButton.disabled = !groqApiKeyInput.value.trim();
     });
     
+    // Generic helper function to get valid model for provider
+    function getValidModelForProvider(
+      currentModel: string, 
+      providerModels: ModelOption[], 
+      provider: 'openai' | 'litellm' | 'groq' | 'openrouter',
+      modelType: 'mini' | 'nano'
+    ): string {
+      // Check if current model is valid for this provider
+      if (providerModels.some(model => model.value === currentModel)) {
+        return currentModel;
+      }
+      
+      // Get defaults from AIChatPanel's DEFAULT_PROVIDER_MODELS
+      const defaults = DEFAULT_PROVIDER_MODELS[provider] || DEFAULT_PROVIDER_MODELS.openai;
+      const defaultModel = modelType === 'mini' ? defaults.mini : defaults.nano;
+      
+      // Return default if it exists in provider models, otherwise return current model
+      return defaultModel && providerModels.some(model => model.value === defaultModel) 
+        ? defaultModel 
+        : currentModel;
+    }
+    
     // Function to update Groq model selectors
     function updateGroqModelSelectors() {
       logger.debug('Updating Groq model selectors');
@@ -1264,6 +1325,12 @@ export class SettingsDialog {
       // Get the latest model options filtered for Groq provider
       const groqModels = getModelOptions('groq');
       logger.debug('Groq models from getModelOptions:', groqModels);
+
+      // Get valid models using generic helper
+      const validMiniModel = getValidModelForProvider(miniModel, groqModels, 'groq', 'mini');
+      const validNanoModel = getValidModelForProvider(nanoModel, groqModels, 'groq', 'nano');
+      
+      logger.debug('Groq model selection:', { originalMini: miniModel, validMini: validMiniModel, originalNano: nanoModel, validNano: validNanoModel });
 
       // Clear any existing model selectors
       const existingSelectors = groqContent.querySelectorAll('.model-selection-section');
@@ -1288,7 +1355,7 @@ export class SettingsDialog {
         i18nString(UIStrings.miniModelDescription),
         'groq-mini-model-select',
         groqModels,
-        miniModel,
+        validMiniModel,
         i18nString(UIStrings.defaultMiniOption),
         undefined // No focus handler needed for Groq
       );
@@ -1302,7 +1369,7 @@ export class SettingsDialog {
         i18nString(UIStrings.nanoModelDescription),
         'groq-nano-model-select',
         groqModels,
-        nanoModel,
+        validNanoModel,
         i18nString(UIStrings.defaultNanoOption),
         undefined // No focus handler needed for Groq
       );
@@ -1393,6 +1460,207 @@ export class SettingsDialog {
     openrouterApiKeyInput.value = settingsSavedOpenRouterApiKey;
     openrouterSettingsSection.appendChild(openrouterApiKeyInput);
     
+    // OAuth section - alternative to API key
+    const oauthDivider = document.createElement('div');
+    oauthDivider.className = 'settings-divider';
+    oauthDivider.textContent = 'OR';
+    openrouterSettingsSection.appendChild(oauthDivider);
+    
+    const oauthButtonContainer = document.createElement('div');
+    oauthButtonContainer.className = 'oauth-button-container';
+    openrouterSettingsSection.appendChild(oauthButtonContainer);
+    
+    const oauthButton = document.createElement('button');
+    oauthButton.className = 'settings-button oauth-button';
+    oauthButton.setAttribute('type', 'button');
+    oauthButton.textContent = 'Connect with OpenRouter';
+    oauthButtonContainer.appendChild(oauthButton);
+    
+    const oauthStatus = document.createElement('div');
+    oauthStatus.className = 'oauth-status';
+    oauthStatus.style.display = 'none';
+    oauthButtonContainer.appendChild(oauthStatus);
+    
+    // Add OAuth-specific styles
+    const oauthStyles = document.createElement('style');
+    oauthStyles.textContent = `
+      .settings-divider {
+        text-align: center;
+        margin: 15px 0;
+        color: var(--color-text-secondary);
+        font-size: 12px;
+        font-weight: bold;
+      }
+      .oauth-button-container {
+        margin-bottom: 10px;
+      }
+      .oauth-button {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border: none;
+        padding: 10px 20px;
+        border-radius: 6px;
+        cursor: pointer;
+        font-weight: 500;
+        transition: all 0.3s ease;
+        width: 100%;
+        margin-bottom: 8px;
+      }
+      .oauth-button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+      }
+      .oauth-button:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+        transform: none;
+        box-shadow: none;
+      }
+      .oauth-button.disconnect {
+        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+      }
+      .oauth-status {
+        font-size: 12px;
+        margin-top: 5px;
+        padding: 5px 8px;
+        border-radius: 4px;
+        background: var(--color-background-highlight);
+      }
+    `;
+    document.head.appendChild(oauthStyles);
+    
+    // Import OAuth service dynamically when needed
+    let OpenRouterOAuth: any = null;
+    const getOpenRouterOAuth = async () => {
+      if (!OpenRouterOAuth) {
+        const module = await import('../auth/OpenRouterOAuth.js');
+        OpenRouterOAuth = module.OpenRouterOAuth;
+      }
+      return OpenRouterOAuth;
+    };
+    
+    // Update OAuth button state
+    const updateOAuthButton = async () => {
+      const OAuth = await getOpenRouterOAuth();
+      if (await OAuth.isOAuthAuthenticated()) {
+        oauthButton.textContent = 'Disconnect OpenRouter';
+        oauthButton.classList.add('disconnect');
+        oauthStatus.textContent = '✓ Connected via OpenRouter account';
+        oauthStatus.style.color = 'var(--color-accent-green)';
+        oauthStatus.style.display = 'block';
+      } else {
+        oauthButton.textContent = 'Connect with OpenRouter';
+        oauthButton.classList.remove('disconnect');
+        oauthStatus.style.display = 'none';
+      }
+    };
+    
+    oauthButtonContainer.appendChild(oauthButton);
+    updateOAuthButton();
+    
+    // OAuth button click handler
+    oauthButton.addEventListener('click', async () => {
+      const OAuth = await getOpenRouterOAuth();
+      oauthButton.disabled = true;
+      
+      try {
+        if (await OAuth.isOAuthAuthenticated()) {
+          // Disconnect
+          if (confirm('Are you sure you want to disconnect your OpenRouter account?')) {
+            await OAuth.revokeToken();
+            updateOAuthButton();
+          }
+        } else {
+          // Connect - provide clear feedback for tab-based flow
+          oauthButton.textContent = 'Redirecting to OpenRouter...';
+          oauthStatus.textContent = 'You will be redirected to OpenRouter to authorize access. The page will return here automatically after authorization.';
+          oauthStatus.style.color = 'var(--color-text-secondary)';
+          oauthStatus.style.display = 'block';
+          
+          await OAuth.startAuthFlow();
+          updateOAuthButton();
+        }
+      } catch (error) {
+        console.error('OAuth flow error:', error);
+        oauthStatus.textContent = `Error: ${error instanceof Error ? error.message : 'Unknown error'}`;
+        oauthStatus.style.color = 'var(--color-accent-red)';
+        oauthStatus.style.display = 'block';
+      } finally {
+        oauthButton.disabled = false;
+        if (!await OAuth.isOAuthAuthenticated()) {
+          oauthButton.textContent = 'Connect with OpenRouter';
+          oauthStatus.style.display = 'none';
+        }
+      }
+    });
+    
+    // Handle OAuth events
+    const handleOAuthSuccess = () => {
+      updateOAuthButton();
+      oauthStatus.textContent = '✓ Successfully connected to OpenRouter';
+      oauthStatus.style.color = 'var(--color-accent-green)';
+      oauthStatus.style.display = 'block';
+      
+      // Trigger chat panel refresh to recognize new credentials
+      const chatPanel = document.querySelector('ai-chat-panel') as any;
+      if (chatPanel && typeof chatPanel.refreshCredentials === 'function') {
+        chatPanel.refreshCredentials();
+      }
+      
+      // Auto-save settings and close dialog after successful OAuth
+      onSettingsSaved(); // Notify parent that settings changed
+      setTimeout(() => {
+        dialog.hide(); // Close dialog after showing success message
+      }, 2000); // 2 seconds to show success message
+    };
+    
+    const handleOAuthError = (event: Event) => {
+      const customEvent = event as CustomEvent;
+      oauthStatus.textContent = `Error: ${customEvent.detail.error}`;
+      oauthStatus.style.color = 'var(--color-accent-red)';
+      oauthStatus.style.display = 'block';
+    };
+    
+    const handleOAuthLogout = () => {
+      // Clear the API key input field
+      openrouterApiKeyInput.value = '';
+      
+      // Update OAuth button state
+      updateOAuthButton();
+      
+      // Show logout confirmation
+      oauthStatus.textContent = '✓ Disconnected from OpenRouter';
+      oauthStatus.style.color = 'var(--color-text-secondary)';
+      oauthStatus.style.display = 'block';
+      
+      // Refresh chat panel to recognize credential removal
+      const chatPanel = document.querySelector('ai-chat-panel') as any;
+      if (chatPanel && typeof chatPanel.refreshCredentials === 'function') {
+        chatPanel.refreshCredentials();
+      }
+      
+      // Auto-close dialog after showing disconnect message
+      setTimeout(() => {
+        dialog.hide();
+      }, 2000); // 2 seconds to show disconnect message
+    };
+    
+    window.addEventListener('openrouter-oauth-success', handleOAuthSuccess);
+    window.addEventListener('openrouter-oauth-error', handleOAuthError);
+    window.addEventListener('openrouter-oauth-logout', handleOAuthLogout);
+    
+    // Update API key input behavior for OAuth compatibility
+    openrouterApiKeyInput.addEventListener('input', async () => {
+      if (openrouterApiKeyInput.value.trim()) {
+        // Switch to manual API key method
+        localStorage.setItem('openrouter_auth_method', 'api_key');
+        const OAuth = await getOpenRouterOAuth();
+        if (await OAuth.isOAuthAuthenticated()) {
+          OAuth.switchToManualApiKey();
+        }
+      }
+    });
+    
     // Fetch OpenRouter models button
     const openrouterFetchButtonContainer = document.createElement('div');
     openrouterFetchButtonContainer.className = 'fetch-button-container';
@@ -1423,6 +1691,12 @@ export class SettingsDialog {
       const openrouterModels = getModelOptions('openrouter');
       logger.debug('OpenRouter models from getModelOptions:', openrouterModels);
 
+      // Get valid models using generic helper
+      const validMiniModel = getValidModelForProvider(miniModel, openrouterModels, 'openrouter', 'mini');
+      const validNanoModel = getValidModelForProvider(nanoModel, openrouterModels, 'openrouter', 'nano');
+      
+      logger.debug('OpenRouter model selection:', { originalMini: miniModel, validMini: validMiniModel, originalNano: nanoModel, validNano: validNanoModel });
+
       // Clear any existing model selectors
       const existingSelectors = openrouterContent.querySelectorAll('.model-selection-section');
       existingSelectors.forEach(selector => selector.remove());
@@ -1439,7 +1713,7 @@ export class SettingsDialog {
         i18nString(UIStrings.miniModelDescription),
         'openrouter-mini-model-select',
         openrouterModels,
-        miniModel,
+        validMiniModel,
         i18nString(UIStrings.defaultMiniOption),
         undefined // No focus handler needed for OpenRouter
       );
@@ -1451,7 +1725,7 @@ export class SettingsDialog {
         i18nString(UIStrings.nanoModelDescription),
         'openrouter-nano-model-select',
         openrouterModels,
-        nanoModel,
+        validNanoModel,
         i18nString(UIStrings.defaultNanoOption),
         undefined // No focus handler needed for OpenRouter
       );
@@ -2358,6 +2632,26 @@ export class SettingsDialog {
       }, 1500);
     });
     
+    // Advanced Settings Toggle Logic
+    function toggleAdvancedSections(show: boolean): void {
+      const display = show ? 'block' : 'none';
+      historySection.style.display = display;
+      vectorDBSection.style.display = display;
+      tracingSection.style.display = display;
+      evaluationSection.style.display = display;
+      
+      // Save state to localStorage
+      localStorage.setItem(ADVANCED_SETTINGS_ENABLED_KEY, show.toString());
+    }
+    
+    // Set initial state of advanced sections
+    toggleAdvancedSections(advancedToggleCheckbox.checked);
+    
+    // Add event listener for toggle
+    advancedToggleCheckbox.addEventListener('change', () => {
+      toggleAdvancedSections(advancedToggleCheckbox.checked);
+    });
+    
     // Add styles
     const styleElement = document.createElement('style');
     styleElement.textContent = `
@@ -2720,36 +3014,86 @@ export class SettingsDialog {
         border-left: 2px solid var(--color-details-hairline);
       }
 
-      /* Evaluation section styles */
-      .evaluation-section {
-        margin-top: 16px;
+      /* Advanced Settings Toggle styles */
+      .advanced-settings-toggle-section {
         padding: 16px 20px;
         border-bottom: 1px solid var(--color-details-hairline);
+        background-color: var(--color-background-highlight);
       }
       
-      .evaluation-enabled-container {
+      .advanced-settings-toggle-container {
         display: flex;
         align-items: center;
         gap: 8px;
         margin-bottom: 8px;
       }
       
-      .evaluation-checkbox {
+      .advanced-settings-checkbox {
         margin: 0;
+        transform: scale(1.1);
       }
       
-      .evaluation-label {
+      .advanced-settings-label {
         font-weight: 500;
         color: var(--color-text-primary);
         cursor: pointer;
-      }
-      
-      .evaluation-config-container {
-        margin-top: 16px;
-        padding-left: 24px;
-        border-left: 2px solid var(--color-details-hairline);
+        font-size: 14px;
       }
 
+      /* Advanced Settings Toggle styles */
+      .advanced-settings-toggle-section {
+        padding: 16px 20px;
+        border-bottom: 1px solid var(--color-details-hairline);
+        background-color: var(--color-background-highlight);
+      }
+      
+      .advanced-settings-toggle-container {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+      
+      .advanced-settings-checkbox {
+        margin: 0;
+        transform: scale(1.1);
+      }
+      
+      .advanced-settings-label {
+        font-weight: 500;
+        color: var(--color-text-primary);
+        cursor: pointer;
+        font-size: 14px;
+      }
+
+      /* Evaluation section styles */
+      .evaluation-section {
+        margin-top: 16px;
+        padding: 16px 20px;
+        border-bottom: 1px solid var(--color-details-hairline);
+      }
+
+      .evaluation-buttons-container {
+        display: flex;
+        gap: 8px;
+        margin-top: 16px;
+      }
+
+      .connect-button {
+        background-color: var(--color-accent-blue-background);
+        color: var(--color-accent-blue);
+        border: 1px solid var(--color-accent-blue);
+      }
+
+      .connect-button:hover {
+        background-color: var(--color-accent-blue);
+        color: var(--color-background);
+      }
+
+      .connect-button:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
     `;
     dialog.contentElement.appendChild(styleElement);
     
