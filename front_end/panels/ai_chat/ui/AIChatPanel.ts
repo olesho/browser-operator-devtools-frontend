@@ -58,7 +58,7 @@ class StorageMonitor {
     };
     
     // Monitor removeItem operations
-    localStorage.removeItem = (key: string) => {
+localStorage.removeItem = (key: string) => {
       if (key.includes('openrouter') || key.includes('ai_chat')) {
         logger.debug(`=== LOCALSTORAGE REMOVE ===`);
         logger.debug(`Key: ${key}`);
@@ -744,6 +744,7 @@ export class AIChatPanel extends UI.Panel.Panel {
       localStorage.setItem(MINI_MODEL_STORAGE_KEY, this.#miniModel);
     } else {
       this.#miniModel = '';
+      localStorage.removeItem(MINI_MODEL_STORAGE_KEY);
     }
 
     // Load nano model - check that it belongs to current provider
@@ -757,6 +758,7 @@ export class AIChatPanel extends UI.Panel.Panel {
       localStorage.setItem(NANO_MODEL_STORAGE_KEY, this.#nanoModel);
     } else {
       this.#nanoModel = '';
+      localStorage.removeItem(NANO_MODEL_STORAGE_KEY);
     }
     
     logger.info('Loaded model selections:', {
