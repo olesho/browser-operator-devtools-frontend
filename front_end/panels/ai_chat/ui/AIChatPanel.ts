@@ -12,13 +12,67 @@ import * as Lit from '../../../ui/lit/lit.js';
 import * as VisualLogging from '../../../ui/visual_logging/visual_logging.js';
 import {AgentService, Events as AgentEvents} from '../core/AgentService.js';
 import { LLMClient } from '../LLM/LLMClient.js';
+import { LLMProviderRegistry } from '../LLM/LLMProviderRegistry.js';
 import { OpenAIProvider } from '../LLM/OpenAIProvider.js';
 import { LiteLLMProvider } from '../LLM/LiteLLMProvider.js';
 import { GroqProvider } from '../LLM/GroqProvider.js';
 import { OpenRouterProvider } from '../LLM/OpenRouterProvider.js';
 import { createLogger } from '../core/Logger.js';
+import { isEvaluationEnabled, connectToEvaluationService } from '../common/EvaluationConfig.js';
 
 const logger = createLogger('AIChatPanel');
+
+/**
+ * Storage monitoring utility for debugging credential issues
+ */
+class StorageMonitor {
+  private static instance: StorageMonitor | null = null;
+  private originalSetItem: typeof localStorage.setItem;
+  private originalRemoveItem: typeof localStorage.removeItem;
+  
+  private constructor() {
+    this.originalSetItem = localStorage.setItem.bind(localStorage);
+    this.originalRemoveItem = localStorage.removeItem.bind(localStorage);
+    this.setupStorageMonitoring();
+  }
+  
+  static getInstance(): StorageMonitor {
+    if (!StorageMonitor.instance) {
+      StorageMonitor.instance = new StorageMonitor();
+    }
+    return StorageMonitor.instance;
+  }
+  
+  private setupStorageMonitoring(): void {
+    // Monitor setItem operations
+    localStorage.setItem = (key: string, value: string) => {
+      if (key.includes('openrouter') || key.includes('ai_chat')) {
+        logger.debug(`=== LOCALSTORAGE SET ===`);
+        logger.debug(`Key: ${key}`);
+        logger.debug(`Value exists: ${!!value}`);
+        logger.debug(`Value length: ${value?.length || 0}`);
+        logger.debug(`Value preview: ${value?.substring(0, 50) + (value?.length > 50 ? '...' : '') || 'null'}`);
+        logger.debug(`Timestamp: ${new Date().toISOString()}`);
+      }
+      return this.originalSetItem(key, value);
+    };
+    
+    // Monitor removeItem operations
+localStorage.removeItem = (key: string) => {
+      if (key.includes('openrouter') || key.includes('ai_chat')) {
+        logger.debug(`=== LOCALSTORAGE REMOVE ===`);
+        logger.debug(`Key: ${key}`);
+        logger.debug(`Timestamp: ${new Date().toISOString()}`);
+      }
+      return this.originalRemoveItem(key);
+    };
+  }
+  
+  restore(): void {
+    localStorage.setItem = this.originalSetItem;
+    localStorage.removeItem = this.originalRemoveItem;
+  }
+}
 
 import chatViewStyles from './chatView.css.js';
 import {
@@ -50,6 +104,30 @@ const DEFAULT_OPENAI_MODELS: ModelOption[] = [
   {value: 'gpt-4.1-nano-2025-04-14', label: 'GPT-4.1 Nano', type: 'openai'},
   {value: 'gpt-4.1-2025-04-14', label: 'GPT-4.1', type: 'openai'},
 ];
+
+// Default model selections for each provider
+export const DEFAULT_PROVIDER_MODELS: Record<string, {main: string, mini?: string, nano?: string}> = {
+  openai: {
+    main: 'gpt-4.1-2025-04-14',
+    mini: 'gpt-4.1-mini-2025-04-14',
+    nano: 'gpt-4.1-nano-2025-04-14'
+  },
+  litellm: {
+    main: '', // Will use first available model
+    mini: '',
+    nano: ''
+  },
+  groq: {
+    main: 'meta-llama/llama-4-scout-17b-16e-instruct',
+    mini: 'qwen/qwen3-32b',
+    nano: 'llama-3.1-8b-instant'
+  },
+  openrouter: {
+    main: 'anthropic/claude-sonnet-4',
+    mini: 'google/gemini-2.5-flash',
+    nano: 'google/gemini-2.5-flash-lite-preview-06-17'
+  }
+};
 
 // This will hold the current active model options
 let MODEL_OPTIONS: ModelOption[] = [...DEFAULT_OPENAI_MODELS];
@@ -217,24 +295,36 @@ function toolbarView(input: ToolbarViewInput): Lit.LitTemplate {
   // clang-format on
 }
 
+let aiChatPanelInstance: AIChatPanel|null = null;
+
+// For testing purposes - allows resetting the singleton instance
+export function resetAIChatPanelInstanceForTesting(): void {
+  aiChatPanelInstance = null;
+}
 
 export class AIChatPanel extends UI.Panel.Panel {
-  static #instance: AIChatPanel|null = null;
-
   static instance(): AIChatPanel {
-    if (!AIChatPanel.#instance) {
-      AIChatPanel.#instance = new AIChatPanel();
+    if (!aiChatPanelInstance) {
+      aiChatPanelInstance = new AIChatPanel();
     }
-    return AIChatPanel.#instance;
+    return aiChatPanelInstance;
   }
 
   static getMiniModel(): string {
     const instance = AIChatPanel.instance();
+    
+    // Validate the model selection before returning
+    instance.#validateAndFixModelSelections();
+    
     return instance.#miniModel || instance.#selectedModel;
   }
 
   static getNanoModel(): string {
     const instance = AIChatPanel.instance();
+    
+    // Validate the model selection before returning
+    instance.#validateAndFixModelSelections();
+    
     return instance.#nanoModel || instance.#miniModel || instance.#selectedModel;
   }
 
@@ -261,10 +351,22 @@ export class AIChatPanel extends UI.Panel.Panel {
   }
 
   static getProviderForModel(modelName: string): 'openai' | 'litellm' | 'groq' | 'openrouter' {
+    // Get model options lookup
     const allModelOptions = AIChatPanel.getModelOptions();
     const modelOption = allModelOptions.find(option => option.value === modelName);
-    return (modelOption?.type as 'openai' | 'litellm' | 'groq' | 'openrouter') || 'openai';
+    const originalProvider = (modelOption?.type as 'openai' | 'litellm' | 'groq' | 'openrouter') || 'openai';
+    
+    // Check if the model's original provider is available in the registry
+    if (LLMProviderRegistry.hasProvider(originalProvider)) {
+      return originalProvider;
+    }
+    
+    // If the original provider isn't available, fall back to the currently selected provider
+    const currentProvider = localStorage.getItem(PROVIDER_SELECTION_KEY) || 'openai';
+    logger.debug(`Provider ${originalProvider} not available for model ${modelName}, falling back to current provider: ${currentProvider}`);
+    return currentProvider as 'openai' | 'litellm' | 'groq' | 'openrouter';
   }
+
   
   /**
    * Gets all model options or filters by provider
@@ -275,19 +377,29 @@ export class AIChatPanel extends UI.Panel.Panel {
     // Try to get from all_model_options first (comprehensive list)
     const allModelOptionsStr = localStorage.getItem('ai_chat_all_model_options');
     if (allModelOptionsStr) {
-      const allModelOptions = JSON.parse(allModelOptionsStr);
-      // If provider is specified, filter by it
-      return provider ? allModelOptions.filter((opt: ModelOption) => opt.type === provider) : allModelOptions;
+      try {
+        const allModelOptions = JSON.parse(allModelOptionsStr);
+        // If provider is specified, filter by it
+        return provider ? allModelOptions.filter((opt: ModelOption) => opt.type === provider) : allModelOptions;
+      } catch (error) {
+        console.warn('Failed to parse ai_chat_all_model_options from localStorage, removing corrupted data:', error);
+        localStorage.removeItem('ai_chat_all_model_options');
+      }
     }
     
     // Fallback to legacy model_options if all_model_options doesn't exist
     const modelOptionsStr = localStorage.getItem('ai_chat_model_options');
     if (modelOptionsStr) {
-      const modelOptions = JSON.parse(modelOptionsStr);
-      // If we got legacy options, migrate them to all_model_options for future use
-      localStorage.setItem('ai_chat_all_model_options', modelOptionsStr);
-      // Apply provider filter if needed
-      return provider ? modelOptions.filter((opt: ModelOption) => opt.type === provider) : modelOptions;
+      try {
+        const modelOptions = JSON.parse(modelOptionsStr);
+        // If we got legacy options, migrate them to all_model_options for future use
+        localStorage.setItem('ai_chat_all_model_options', modelOptionsStr);
+        // Apply provider filter if needed
+        return provider ? modelOptions.filter((opt: ModelOption) => opt.type === provider) : modelOptions;
+      } catch (error) {
+        console.warn('Failed to parse ai_chat_model_options from localStorage, removing corrupted data:', error);
+        localStorage.removeItem('ai_chat_model_options');
+      }
     }
     
     // If nothing is found, return default OpenAI models
@@ -305,10 +417,22 @@ export class AIChatPanel extends UI.Panel.Panel {
     const selectedProvider = localStorage.getItem(PROVIDER_SELECTION_KEY) || 'openai';
     
     // Get existing models from localStorage
-    const existingAllModels = JSON.parse(localStorage.getItem('ai_chat_all_model_options') || '[]');
+    let existingAllModels: ModelOption[] = [];
+    try {
+      existingAllModels = JSON.parse(localStorage.getItem('ai_chat_all_model_options') || '[]');
+    } catch (error) {
+      console.warn('Failed to parse ai_chat_all_model_options from localStorage, using empty array:', error);
+      localStorage.removeItem('ai_chat_all_model_options');
+    }
     
     // Get existing custom models (if any) - these are for LiteLLM only
-    const savedCustomModels = JSON.parse(localStorage.getItem('ai_chat_custom_models') || '[]');
+    let savedCustomModels: string[] = [];
+    try {
+      savedCustomModels = JSON.parse(localStorage.getItem('ai_chat_custom_models') || '[]');
+    } catch (error) {
+      console.warn('Failed to parse ai_chat_custom_models from localStorage, using empty array:', error);
+      localStorage.removeItem('ai_chat_custom_models');
+    }
     const customModels = savedCustomModels.map((model: string) => ({
       value: model,
       label: `LiteLLM: ${model}`,
@@ -512,9 +636,14 @@ export class AIChatPanel extends UI.Panel.Panel {
   constructor() {
     super(AIChatPanel.panelName);
 
+    // Initialize storage monitoring for debugging
+    StorageMonitor.getInstance();
+    
     this.#setupUI();
     this.#setupInitialState();
+    this.#setupOAuthEventListeners();
     this.#initializeAgentService();
+    this.#initializeEvaluationService();
     this.performUpdate();
     this.#fetchLiteLLMModelsOnLoad();
   }
@@ -546,21 +675,16 @@ export class AIChatPanel extends UI.Panel.Panel {
     this.#chatView.style.flexGrow = '1';
     this.#chatView.style.overflow = 'auto';
     this.#chatViewContainer.appendChild(this.#chatView);
+    
+    // Add event listener for manual setup requests from ChatView
+    this.#chatView.addEventListener('manual-setup-requested', this.#handleManualSetupRequest.bind(this));
   }
 
   /**
    * Sets up the initial state from localStorage
    */
   #setupInitialState(): void {
-    // Add welcome message
-    this.#messages.push({
-      entity: ChatMessageEntity.MODEL,
-      action: 'final',
-      answer: i18nString(UIStrings.welcomeMessage),
-      isFinalAnswer: true,
-    });
-
-    // Load API keys and configurations from localStorage
+    // Load API keys and configurations from localStorage first
     this.#apiKey = localStorage.getItem('ai_chat_api_key');
     this.#liteLLMApiKey = localStorage.getItem(LITELLM_API_KEY_STORAGE_KEY);
     this.#liteLLMEndpoint = localStorage.getItem(LITELLM_ENDPOINT_KEY);
@@ -572,6 +696,16 @@ export class AIChatPanel extends UI.Panel.Panel {
     }
 
     this.#setupModelOptions();
+    
+    // Only add welcome message if credentials are available (no OAuth login needed)
+    if (this.#hasAnyProviderCredentials()) {
+      this.#messages.push({
+        entity: ChatMessageEntity.MODEL,
+        action: 'final',
+        answer: i18nString(UIStrings.welcomeMessage),
+        isFinalAnswer: true,
+      });
+    }
   }
 
   /**
@@ -602,12 +736,19 @@ export class AIChatPanel extends UI.Panel.Panel {
     }
     
     this.#loadModelSelections();
+    
+    // Validate models after loading
+    this.#validateAndFixModelSelections();
   }
 
   /**
    * Loads model selections from localStorage
    */
   #loadModelSelections(): void {
+    // Get the current provider
+    const currentProvider = localStorage.getItem(PROVIDER_SELECTION_KEY) || 'openai';
+    const providerDefaults = DEFAULT_PROVIDER_MODELS[currentProvider] || DEFAULT_PROVIDER_MODELS.openai;
+    
     // Load the selected model
     const storedModel = localStorage.getItem(MODEL_SELECTION_KEY);
     
@@ -619,38 +760,218 @@ export class AIChatPanel extends UI.Panel.Panel {
     if (storedModel && MODEL_OPTIONS.some(option => option.value === storedModel)) {
       this.#selectedModel = storedModel;
     } else if (MODEL_OPTIONS.length > 0) {
-      // If stored model is not valid, select the first available model
-      this.#selectedModel = MODEL_OPTIONS[0].value;
+      // Check if provider default main model is available
+      if (providerDefaults.main && MODEL_OPTIONS.some(option => option.value === providerDefaults.main)) {
+        this.#selectedModel = providerDefaults.main;
+      } else {
+        // Otherwise, use the first available model
+        this.#selectedModel = MODEL_OPTIONS[0].value;
+      }
       localStorage.setItem(MODEL_SELECTION_KEY, this.#selectedModel);
     }
     
-    // Load mini model
+    // Load mini model - check that it belongs to current provider
     const storedMiniModel = localStorage.getItem(MINI_MODEL_STORAGE_KEY);
-    if (storedMiniModel && MODEL_OPTIONS.some(option => option.value === storedMiniModel)) {
+    const storedMiniModelOption = storedMiniModel ? MODEL_OPTIONS.find(option => option.value === storedMiniModel) : null;
+    if (storedMiniModelOption && storedMiniModelOption.type === currentProvider && storedMiniModel) {
       this.#miniModel = storedMiniModel;
+    } else if (providerDefaults.mini && MODEL_OPTIONS.some(option => option.value === providerDefaults.mini)) {
+      // Use provider default mini model if available
+      this.#miniModel = providerDefaults.mini;
+      localStorage.setItem(MINI_MODEL_STORAGE_KEY, this.#miniModel);
     } else {
       this.#miniModel = '';
       localStorage.removeItem(MINI_MODEL_STORAGE_KEY);
     }
 
-    // Load nano model
+    // Load nano model - check that it belongs to current provider
     const storedNanoModel = localStorage.getItem(NANO_MODEL_STORAGE_KEY);
-    if (storedNanoModel && MODEL_OPTIONS.some(option => option.value === storedNanoModel)) {
+    const storedNanoModelOption = storedNanoModel ? MODEL_OPTIONS.find(option => option.value === storedNanoModel) : null;
+    if (storedNanoModelOption && storedNanoModelOption.type === currentProvider && storedNanoModel) {
       this.#nanoModel = storedNanoModel;
+    } else if (providerDefaults.nano && MODEL_OPTIONS.some(option => option.value === providerDefaults.nano)) {
+      // Use provider default nano model if available
+      this.#nanoModel = providerDefaults.nano;
+      localStorage.setItem(NANO_MODEL_STORAGE_KEY, this.#nanoModel);
     } else {
       this.#nanoModel = '';
       localStorage.removeItem(NANO_MODEL_STORAGE_KEY);
     }
     
     logger.info('Loaded model selections:', {
+      provider: currentProvider,
       selectedModel: this.#selectedModel,
       miniModel: this.#miniModel,
       nanoModel: this.#nanoModel
     });
   }
 
+  /**
+   * Public wrapper for testing the model validation logic
+   * @internal This method is for testing purposes only
+   */
+  validateAndFixModelSelectionsForTesting(): boolean {
+    return this.#validateAndFixModelSelections();
+  }
+
+  /**
+   * Validates and fixes model selections to ensure they exist in the current provider
+   * Returns true if all models are valid, false if any needed to be fixed
+   */
+  #validateAndFixModelSelections(): boolean {
+    logger.info('=== VALIDATING MODEL SELECTIONS ===');
+    
+    const currentProvider = localStorage.getItem(PROVIDER_SELECTION_KEY) || 'openai';
+    const providerDefaults = DEFAULT_PROVIDER_MODELS[currentProvider] || DEFAULT_PROVIDER_MODELS.openai;
+    const availableModels = AIChatPanel.getModelOptions(currentProvider as 'openai' | 'litellm' | 'groq' | 'openrouter');
+    
+    let allValid = true;
+    
+    // Log current state
+    logger.info('Current state:', {
+      provider: currentProvider,
+      selectedModel: this.#selectedModel,
+      miniModel: this.#miniModel,
+      nanoModel: this.#nanoModel,
+      availableModelsCount: availableModels.length
+    });
+    
+    // If no models available for provider, we have a problem
+    if (availableModels.length === 0) {
+      logger.error(`No models available for provider ${currentProvider}`);
+      return false;
+    }
+    
+    // Validate main model
+    const mainModelValid = availableModels.some(m => m.value === this.#selectedModel);
+    if (!mainModelValid) {
+      logger.warn(`Main model ${this.#selectedModel} not valid for ${currentProvider}, resetting...`);
+      allValid = false;
+      
+      // Try provider default first
+      if (providerDefaults.main && availableModels.some(m => m.value === providerDefaults.main)) {
+        this.#selectedModel = providerDefaults.main;
+        logger.info(`Reset main model to provider default: ${providerDefaults.main}`);
+      } else {
+        // Fall back to first available model
+        this.#selectedModel = availableModels[0].value;
+        logger.info(`Reset main model to first available: ${this.#selectedModel}`);
+      }
+      localStorage.setItem(MODEL_SELECTION_KEY, this.#selectedModel);
+    }
+    
+    // Validate mini model
+    if (this.#miniModel) {
+      const miniModelValid = availableModels.some(m => m.value === this.#miniModel);
+      if (!miniModelValid) {
+        logger.warn(`Mini model ${this.#miniModel} not valid for ${currentProvider}, resetting...`);
+        allValid = false;
+        
+        // Try provider default first
+        if (providerDefaults.mini && availableModels.some(m => m.value === providerDefaults.mini)) {
+          this.#miniModel = providerDefaults.mini;
+          logger.info(`Reset mini model to provider default: ${providerDefaults.mini}`);
+          localStorage.setItem(MINI_MODEL_STORAGE_KEY, this.#miniModel);
+        } else {
+          // Clear mini model to fall back to main model
+          this.#miniModel = '';
+          logger.info('Cleared mini model to fall back to main model');
+          localStorage.removeItem(MINI_MODEL_STORAGE_KEY);
+        }
+      }
+    }
+    
+    // Validate nano model
+    if (this.#nanoModel) {
+      const nanoModelValid = availableModels.some(m => m.value === this.#nanoModel);
+      if (!nanoModelValid) {
+        logger.warn(`Nano model ${this.#nanoModel} not valid for ${currentProvider}, resetting...`);
+        allValid = false;
+        
+        // Try provider default first
+        if (providerDefaults.nano && availableModels.some(m => m.value === providerDefaults.nano)) {
+          this.#nanoModel = providerDefaults.nano;
+          logger.info(`Reset nano model to provider default: ${providerDefaults.nano}`);
+          localStorage.setItem(NANO_MODEL_STORAGE_KEY, this.#nanoModel);
+        } else {
+          // Clear nano model to fall back to mini/main model
+          this.#nanoModel = '';
+          logger.info('Cleared nano model to fall back to mini/main model');
+          localStorage.removeItem(NANO_MODEL_STORAGE_KEY);
+        }
+      }
+    }
+    
+    // Log final state
+    logger.info('Validation complete:', {
+      allValid,
+      finalSelectedModel: this.#selectedModel,
+      finalMiniModel: this.#miniModel,
+      finalNanoModel: this.#nanoModel
+    });
+    
+    return allValid;
+  }
+
+  /**
+   * Sets up event listeners for OAuth authentication events
+   */
+  #setupOAuthEventListeners(): void {
+    // Listen for OAuth success events
+    window.addEventListener('openrouter-oauth-success', () => {
+      logger.info('=== OAUTH SUCCESS EVENT RECEIVED IN AICHATPANEL ===');
+      logger.info('Timestamp:', new Date().toISOString());
+      logger.info('Current localStorage state for OpenRouter:');
+      const apiKey = localStorage.getItem('ai_chat_openrouter_api_key');
+      const authMethod = localStorage.getItem('openrouter_auth_method');
+      logger.info('- API key exists:', !!apiKey);
+      logger.info('- API key length:', apiKey?.length || 0);
+      logger.info('- Auth method:', authMethod);
+      logger.info('Re-initializing agent service after OAuth success...');
+      this.#initializeAgentService();
+    });
+    
+    // Listen for OAuth logout events  
+    window.addEventListener('openrouter-oauth-logout', () => {
+      logger.info('=== OAUTH LOGOUT EVENT RECEIVED IN AICHATPANEL ===');
+      logger.info('Re-initializing agent service after OAuth logout...');
+      this.#initializeAgentService();
+    });
+
+    // Listen for localStorage changes (covers manual API key changes too)
+    window.addEventListener('storage', (event) => {
+      if (event.key === 'ai_chat_openrouter_api_key' || 
+          event.key === 'openrouter_auth_method') {
+        logger.info('=== STORAGE CHANGE EVENT FOR OPENROUTER ===');
+        logger.info('Changed key:', event.key);
+        logger.info('Old value exists:', !!event.oldValue);
+        logger.info('New value exists:', !!event.newValue);
+        logger.info('New value length:', event.newValue?.length || 0);
+        logger.info('Re-initializing agent service after storage change...');
+        this.#initializeAgentService();
+      }
+    });
+  }
+
   getSelectedModel(): string {
     return this.#selectedModel;
+  }
+
+  /**
+   * Public method to refresh credential validation and agent service
+   * Can be called from settings dialog or other components
+   */
+  refreshCredentials(): void {
+    logger.info('=== MANUAL CREDENTIAL REFRESH REQUESTED ===');
+    logger.info('Timestamp:', new Date().toISOString());
+    logger.info('Current OpenRouter storage state:');
+    const apiKey = localStorage.getItem('ai_chat_openrouter_api_key');
+    const authMethod = localStorage.getItem('openrouter_auth_method');
+    logger.info('- API key exists:', !!apiKey);
+    logger.info('- API key length:', apiKey?.length || 0);
+    logger.info('- Auth method:', authMethod);
+    logger.info('Calling #initializeAgentService()...');
+    this.#initializeAgentService();
   }
 
   /**
@@ -826,29 +1147,58 @@ export class AIChatPanel extends UI.Panel.Panel {
   }
 
   /**
+   * Initialize the evaluation service if enabled
+   */
+  async #initializeEvaluationService(): Promise<void> {
+    if (isEvaluationEnabled()) {
+      try {
+        await connectToEvaluationService();
+        logger.info('Auto-connected to evaluation service on panel initialization');
+      } catch (error) {
+        logger.error('Failed to auto-connect to evaluation service:', error);
+        // Don't throw - evaluation connection failure shouldn't break the panel
+      }
+    }
+  }
+
+  /**
    * Initialize the agent service based on the current provider and configuration
    */
   #initializeAgentService(): void {
-    logger.info("Initializing agent service...");
+    logger.info("=== INITIALIZING AGENT SERVICE ===");
+    logger.info('Timestamp:', new Date().toISOString());
     
     // Get the selected provider and check model status
     const selectedProvider = localStorage.getItem(PROVIDER_SELECTION_KEY) || 'openai';
-    const { isLiteLLM, isPlaceholder } = this.#getModelStatus(this.#selectedModel);
+    logger.info('Selected provider:', selectedProvider);
+    logger.info('Selected model:', this.#selectedModel);
+    
+    const { isPlaceholder } = this.#getModelStatus(this.#selectedModel);
+    logger.info('Model is placeholder:', isPlaceholder);
     
     // Don't initialize if the selected model is a placeholder
     if (isPlaceholder) {
+      logger.warn('❌ Model is placeholder, cannot initialize agent service');
       this.#setCanSendMessagesState(false, "Selected model is a placeholder");
       return;
     }
     
     // Check credentials based on provider
-    const {canProceed, apiKey} = this.#checkCredentials(selectedProvider, isLiteLLM);
+    logger.info('=== CHECKING CREDENTIALS ===');
+    const {canProceed, apiKey} = this.#checkCredentials(selectedProvider);
+    logger.info('Credential check result:');
+    logger.info('- Can proceed:', canProceed);
+    logger.info('- API key exists:', !!apiKey);
+    logger.info('- API key length:', apiKey?.length || 0);
     
     // Update state if we can't proceed
     if (!canProceed) {
+      logger.error('❌ Cannot proceed - missing required credentials');
       this.#setCanSendMessagesState(false, "Missing required credentials");
       return;
     }
+    
+    logger.info('✅ Credentials valid, proceeding with agent service initialization');
     
     // Remove any existing listeners to prevent duplicates
     this.#agentService.removeEventListener(AgentEvents.MESSAGES_CHANGED, this.#handleMessagesChanged.bind(this));
@@ -857,12 +1207,14 @@ export class AIChatPanel extends UI.Panel.Panel {
     this.#agentService.addEventListener(AgentEvents.MESSAGES_CHANGED, this.#handleMessagesChanged.bind(this));
     
     // Initialize the agent service
+    logger.info('Calling agentService.initialize()...');
     this.#agentService.initialize(apiKey, this.#selectedModel)
       .then(() => {
+        logger.info('✅ Agent service initialized successfully');
         this.#setCanSendMessagesState(true, "Agent service initialized successfully");
       })
       .catch(error => {
-        logger.error('Failed to initialize AgentService:', error);
+        logger.error('❌ Failed to initialize AgentService:', error);
         this.#setCanSendMessagesState(false, `Failed to initialize agent service: ${error instanceof Error ? error.message : String(error)}`);
       });
   }
@@ -871,25 +1223,75 @@ export class AIChatPanel extends UI.Panel.Panel {
    * Helper to set the canSendMessages state and update UI accordingly
    */
   #setCanSendMessagesState(canSend: boolean, reason: string): void {
-    logger.info(`Setting canSendMessages to ${canSend}: ${reason}`);
+    logger.info(`=== SETTING CAN SEND MESSAGES STATE ===`);
+    logger.info(`Previous state: ${this.#canSendMessages}`);
+    logger.info(`New state: ${canSend}`);
+    logger.info(`Reason: ${reason}`);
+    logger.info('Timestamp:', new Date().toISOString());
+    
     this.#canSendMessages = canSend;
     this.#updateChatViewInputState();
     this.performUpdate();
+    
+    logger.info(`✅ State updated - canSendMessages is now: ${this.#canSendMessages}`);
   }
   
   /**
+   * Check if any provider has valid credentials
+   * @returns true if at least one provider has valid credentials
+   */
+  #hasAnyProviderCredentials(): boolean {
+    logger.info('=== CHECKING ALL PROVIDER CREDENTIALS ===');
+    const selectedProvider = localStorage.getItem(PROVIDER_SELECTION_KEY) || 'openai';
+    logger.info('Currently selected provider:', selectedProvider);
+    
+    // Check all providers except LiteLLM (unless LiteLLM is selected)
+    const providers = ['openai', 'groq', 'openrouter'];
+    
+    // Only include LiteLLM if it's the selected provider
+    if (selectedProvider === 'litellm') {
+      providers.push('litellm');
+    }
+    
+    logger.info('Providers to check:', providers);
+    
+    for (const provider of providers) {
+      logger.info(`Checking provider: ${provider}`);
+      const validation = LLMClient.validateProviderCredentials(provider);
+      logger.info(`Provider ${provider} validation result:`, validation);
+      if (validation.isValid) {
+        logger.info(`✅ Found valid credentials for provider: ${provider}`);
+        return true;
+      }
+    }
+    
+    logger.info('❌ No valid credentials found for any provider');
+    return false;
+  }
+
+  /**
    * Checks if required credentials are available based on provider using provider-specific validation
    * @param provider The selected provider ('openai', 'litellm', 'groq', 'openrouter')
-   * @param isLiteLLM Whether the selected model is a LiteLLM model
    * @returns Object with canProceed flag and apiKey
    */
-  #checkCredentials(provider: string, isLiteLLM: boolean): {canProceed: boolean, apiKey: string | null} {
+  #checkCredentials(provider: string): {canProceed: boolean, apiKey: string | null} {
+    logger.info('=== CHECKING CREDENTIALS FOR PROVIDER ===');
+    logger.info('Provider:', provider);
+    logger.info('Timestamp:', new Date().toISOString());
+    
     // Use provider-specific validation
+    logger.info('Calling LLMClient.validateProviderCredentials()...');
     const validation = LLMClient.validateProviderCredentials(provider);
+    logger.info('Validation result:');
+    logger.info('- Is valid:', validation.isValid);
+    logger.info('- Message:', validation.message);
+    logger.info('- Missing items:', validation.missingItems);
     
     let apiKey: string | null = null;
     
     if (validation.isValid) {
+      logger.info('Validation passed, retrieving API key...');
+      
       // Get the API key from the provider-specific storage
       try {
         // Create a temporary provider instance to get storage keys
@@ -913,16 +1315,28 @@ export class AIChatPanel extends UI.Panel.Panel {
         }
         
         const storageKeys = tempProvider.getCredentialStorageKeys();
+        logger.info('Storage keys for provider:');
+        logger.info('- API key storage key:', storageKeys.apiKey);
+        
         apiKey = localStorage.getItem(storageKeys.apiKey || '') || null;
+        logger.info('Retrieved API key:');
+        logger.info('- Exists:', !!apiKey);
+        logger.info('- Length:', apiKey?.length || 0);
+        logger.info('- Prefix:', apiKey?.substring(0, 8) + '...' || 'none');
         
       } catch (error) {
-        logger.error(`Failed to get API key for ${provider}:`, error);
+        logger.error(`❌ Failed to get API key for ${provider}:`, error);
         return {canProceed: false, apiKey: null};
       }
+    } else {
+      logger.warn('❌ Validation failed for provider:', provider);
     }
     
-    logger.info(validation.message);
-    return {canProceed: validation.isValid, apiKey};
+    const result = {canProceed: validation.isValid, apiKey};
+    logger.info('=== CREDENTIAL CHECK COMPLETE ===');
+    logger.info('Final result:', result);
+    
+    return result;
   }
 
   /**
@@ -955,6 +1369,32 @@ export class AIChatPanel extends UI.Panel.Panel {
     } else {
       return i18nString(UIStrings.missingProviderCredentials);
     }
+  }
+
+  /**
+   * Handle OAuth login request from ChatView
+   */
+  #handleOAuthLogin(): void {
+    logger.info('OAuth login requested from ChatView');
+    
+    // Import OpenRouterOAuth dynamically if needed and start the OAuth flow
+    import('../auth/OpenRouterOAuth.js').then(module => {
+      const OpenRouterOAuth = module.OpenRouterOAuth;
+      OpenRouterOAuth.startAuthFlow().catch(error => {
+        logger.error('OAuth flow failed:', error);
+        // Could show user notification here
+      });
+    }).catch(error => {
+      logger.error('Failed to import OpenRouterOAuth:', error);
+    });
+  }
+
+  /**
+   * Handle manual setup request from ChatView
+   */
+  #handleManualSetupRequest(): void {
+    logger.info('Manual setup requested from ChatView');
+    this.#onSettingsClick();
   }
 
   /**
@@ -1060,6 +1500,60 @@ export class AIChatPanel extends UI.Panel.Panel {
     if (!this.#canSendMessages) {
       this.#addUserMessage(text, imageInput);
       this.#addCredentialErrorMessage();
+      return;
+    }
+
+    // Validate and fix model selections before proceeding
+    const modelsValid = this.#validateAndFixModelSelections();
+    
+    // If validation fixed models, update the UI to reflect changes
+    if (!modelsValid) {
+      logger.info('Model selections were fixed, updating UI...');
+      this.performUpdate();
+    }
+
+    // Validate that the selected model's provider is registered
+    const modelProvider = AIChatPanel.getProviderForModel(this.#selectedModel);
+    
+    // Check if the provider is registered in the LLM registry
+    if (!LLMProviderRegistry.hasProvider(modelProvider)) {
+      logger.warn(`Provider ${modelProvider} not registered for model ${this.#selectedModel}, re-initializing...`);
+      
+      // Re-initialize the agent service to ensure provider is registered
+      this.#initializeAgentService();
+      
+      // Check again after initialization
+      if (!LLMProviderRegistry.hasProvider(modelProvider)) {
+        this.#addUserMessage(text, imageInput);
+        const errorMessage: ModelChatMessage = {
+          entity: ChatMessageEntity.MODEL,
+          action: 'final',
+          error: `The ${modelProvider} provider is not properly initialized. Please check your API key and settings.`,
+          isFinalAnswer: true,
+        };
+        this.#messages.push(errorMessage as ChatMessage);
+        this.performUpdate();
+        this.#setProcessingState(false);
+        return;
+      }
+    }
+
+    // Final validation: check if model exists in provider's available models
+    const availableModels = AIChatPanel.getModelOptions(modelProvider);
+    const modelExists = availableModels.some(model => model.value === this.#selectedModel);
+    
+    if (!modelExists) {
+      logger.error(`Selected model ${this.#selectedModel} not found in ${modelProvider} provider's model list`);
+      this.#addUserMessage(text, imageInput);
+      const errorMessage: ModelChatMessage = {
+        entity: ChatMessageEntity.MODEL,
+        action: 'final',
+        error: `The model "${this.#selectedModel}" is not available in the ${modelProvider} provider. Please fetch the latest models in Settings or select a different model.`,
+        isFinalAnswer: true,
+      };
+      this.#messages.push(errorMessage as ChatMessage);
+      this.performUpdate();
+      this.#setProcessingState(false);
       return;
     }
 
@@ -1210,6 +1704,16 @@ export class AIChatPanel extends UI.Panel.Panel {
         isModelSelectorDisabled: this.#isProcessing,
         isInputDisabled: false,
         inputPlaceholder: this.#getInputPlaceholderText(),
+        // Add OAuth login state
+        showOAuthLogin: (() => {
+          const hasCredentials = this.#hasAnyProviderCredentials();
+          const showOAuth = !hasCredentials;
+          logger.info('=== OAUTH LOGIN UI DECISION ===');
+          logger.info('hasAnyProviderCredentials:', hasCredentials);
+          logger.info('showOAuthLogin will be set to:', showOAuth);
+          return showOAuth;
+        })(),
+        onOAuthLogin: this.#handleOAuthLogin.bind(this),
       };
     } catch (error) {
       logger.error('Error updating ChatView state:', error);
@@ -1237,7 +1741,7 @@ export class AIChatPanel extends UI.Panel.Panel {
     this.#isProcessing = false;
     this.#selectedAgentType = null; // Reset selected agent type
     this.performUpdate();
-    UI.ARIAUtils.alert(i18nString(UIStrings.newChatCreated));
+    UI.ARIAUtils.LiveAnnouncer.alert(i18nString(UIStrings.newChatCreated));
   }
 
   /**
@@ -1251,7 +1755,7 @@ export class AIChatPanel extends UI.Panel.Panel {
 
   #onDeleteClick(): void {
     this.#onNewChatClick();
-    UI.ARIAUtils.alert(i18nString(UIStrings.chatDeleted));
+    UI.ARIAUtils.LiveAnnouncer.alert(i18nString(UIStrings.chatDeleted));
   }
 
   #onHelpClick(): void {
@@ -1491,6 +1995,10 @@ export class AIChatPanel extends UI.Panel.Panel {
     }
     
     this.#updateModelSelections();
+    
+    // Validate models after updating selections
+    this.#validateAndFixModelSelections();
+    
     this.#initializeAgentService();
     // Update toolbar to reflect vector DB enabled state
     this.#updateToolbar();
@@ -1500,29 +2008,64 @@ export class AIChatPanel extends UI.Panel.Panel {
    * Updates model selections based on updated options
    */
   #updateModelSelections(): void {
+    // Get the current provider and its defaults
+    const currentProvider = localStorage.getItem(PROVIDER_SELECTION_KEY) || 'openai';
+    const providerDefaults = DEFAULT_PROVIDER_MODELS[currentProvider] || DEFAULT_PROVIDER_MODELS.openai;
+    
     // Load saved mini/nano models if valid
     const storedMiniModel = localStorage.getItem(MINI_MODEL_STORAGE_KEY);
     const storedNanoModel = localStorage.getItem(NANO_MODEL_STORAGE_KEY);
     
-    // Check if mini/nano models are still valid with the new MODEL_OPTIONS
-    if (storedMiniModel && MODEL_OPTIONS.some(option => option.value === storedMiniModel)) {
+    // Check if mini/nano models are still valid with the new MODEL_OPTIONS AND belong to current provider
+    const storedMiniModelOption = storedMiniModel ? MODEL_OPTIONS.find(option => option.value === storedMiniModel) : null;
+    if (storedMiniModelOption && storedMiniModelOption.type === currentProvider && storedMiniModel) {
       this.#miniModel = storedMiniModel;
+    } else if (providerDefaults.mini && MODEL_OPTIONS.some(option => option.value === providerDefaults.mini)) {
+      // Use provider default mini model if available
+      this.#miniModel = providerDefaults.mini;
+      localStorage.setItem(MINI_MODEL_STORAGE_KEY, this.#miniModel);
     } else {
       this.#miniModel = '';
+      localStorage.removeItem(MINI_MODEL_STORAGE_KEY);
     }
     
-    if (storedNanoModel && MODEL_OPTIONS.some(option => option.value === storedNanoModel)) {
+    const storedNanoModelOption = storedNanoModel ? MODEL_OPTIONS.find(option => option.value === storedNanoModel) : null;
+    if (storedNanoModelOption && storedNanoModelOption.type === currentProvider && storedNanoModel) {
       this.#nanoModel = storedNanoModel;
+    } else if (providerDefaults.nano && MODEL_OPTIONS.some(option => option.value === providerDefaults.nano)) {
+      // Use provider default nano model if available
+      this.#nanoModel = providerDefaults.nano;
+      localStorage.setItem(NANO_MODEL_STORAGE_KEY, this.#nanoModel);
     } else {
       this.#nanoModel = '';
+      localStorage.removeItem(NANO_MODEL_STORAGE_KEY);
     }
     
     // Check if the current selected model is valid for the new provider
-    if (!MODEL_OPTIONS.some(opt => opt.value === this.#selectedModel) && MODEL_OPTIONS.length > 0) {
-      logger.info(`Selected model ${this.#selectedModel} is no longer valid with selected provider`);
-      this.#selectedModel = MODEL_OPTIONS[0].value;
+    const selectedModelOption = MODEL_OPTIONS.find(opt => opt.value === this.#selectedModel);
+    if (!selectedModelOption || selectedModelOption.type !== currentProvider) {
+      logger.info(`Selected model ${this.#selectedModel} is not valid for provider ${currentProvider}`);
+      
+      // Try to use provider default main model first
+      if (providerDefaults.main && MODEL_OPTIONS.some(option => option.value === providerDefaults.main)) {
+        this.#selectedModel = providerDefaults.main;
+      } else if (MODEL_OPTIONS.length > 0) {
+        // Otherwise, use the first available model
+        this.#selectedModel = MODEL_OPTIONS[0].value;
+      }
       localStorage.setItem(MODEL_SELECTION_KEY, this.#selectedModel);
     }
+    
+    // Log the updated selections
+    logger.info('Updated model selections for provider change:', {
+      provider: currentProvider,
+      selectedModel: this.#selectedModel,
+      miniModel: this.#miniModel,
+      nanoModel: this.#nanoModel
+    });
+    
+    // Trigger UI update to reflect the new model selections
+    this.performUpdate();
   }
 
   /**

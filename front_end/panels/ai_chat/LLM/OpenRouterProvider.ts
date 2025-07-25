@@ -71,6 +71,13 @@ export class OpenRouterProvider extends LLMBaseProvider {
   }
 
   /**
+   * Get the models endpoint URL with tool support filter
+   */
+  private getToolSupportingModelsEndpoint(): string {
+    return `${OpenRouterProvider.API_BASE_URL}${OpenRouterProvider.MODELS_PATH}?supported_parameters=tools`;
+  }
+
+  /**
    * Converts LLMMessage format to OpenRouter/OpenAI format
    */
   private convertMessagesToOpenRouter(messages: LLMMessage[]): any[] {
@@ -115,7 +122,7 @@ export class OpenRouterProvider extends LLMBaseProvider {
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ error: { message: 'Unknown error' } }));
-        logger.error('OpenRouter API error:', errorData);
+        logger.error('OpenRouter API error:', JSON.stringify(errorData, null, 2));
         throw new Error(`OpenRouter API error: ${response.statusText} - ${errorData?.error?.message || 'Unknown error'}`);
       }
 
@@ -277,13 +284,13 @@ export class OpenRouterProvider extends LLMBaseProvider {
   }
 
   /**
-   * Fetch available models from OpenRouter API
+   * Fetch available models from OpenRouter API that support tool calls
    */
   async fetchModels(): Promise<OpenRouterModel[]> {
-    logger.debug('Fetching available OpenRouter models...');
+    logger.debug('Fetching available OpenRouter models that support tool calls...');
 
     try {
-      const response = await fetch(this.getModelsEndpoint(), {
+      const response = await fetch(this.getToolSupportingModelsEndpoint(), {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${this.apiKey}`,
@@ -292,7 +299,7 @@ export class OpenRouterProvider extends LLMBaseProvider {
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ error: { message: 'Unknown error' } }));
-        logger.error('OpenRouter models API error:', errorData);
+        logger.error('OpenRouter models API error:', JSON.stringify(errorData, null, 2));
         throw new Error(`OpenRouter models API error: ${response.statusText} - ${errorData?.error?.message || 'Unknown error'}`);
       }
 
@@ -341,17 +348,9 @@ export class OpenRouterProvider extends LLMBaseProvider {
    * Check if a model supports function calling based on its metadata
    */
   private modelSupportsFunctionCalling(model: OpenRouterModel): boolean {
-    // Most modern models on OpenRouter support function calling
-    // We can be more specific based on known models
-    const functionCallingModels = [
-      'gpt-4', 'gpt-3.5-turbo', 'claude-3', 'claude-2',
-      'mistral', 'mixtral', 'llama-3', 'gemini'
-    ];
-    
-    return functionCallingModels.some(modelType => 
-      model.id.toLowerCase().includes(modelType) || 
-      model.name?.toLowerCase().includes(modelType)
-    );
+    // Since we now fetch models with supported_parameters=tools filter,
+    // all returned models support function calling
+    return true;
   }
 
   /**
@@ -447,8 +446,19 @@ export class OpenRouterProvider extends LLMBaseProvider {
         }
       },
       {
-        id: 'google/gemini-pro-1.5',
-        name: 'Gemini Pro 1.5',
+        id: 'google/gemini-2.5-pro',
+        name: 'Gemini Pro 2.5',
+        provider: 'openrouter' as LLMProvider,
+        capabilities: {
+          functionCalling: true,
+          reasoning: false,
+          vision: true,
+          structured: true
+        }
+      },
+      {
+        id: 'google/gemini-2.5-flash',
+        name: 'Gemini Pro 2.5 Flash',
         provider: 'openrouter' as LLMProvider,
         capabilities: {
           functionCalling: true,
@@ -496,10 +506,37 @@ export class OpenRouterProvider extends LLMBaseProvider {
    * Validate that required credentials are available for OpenRouter
    */
   validateCredentials(): {isValid: boolean, message: string, missingItems?: string[]} {
+    logger.debug('=== VALIDATING OPENROUTER CREDENTIALS ===');
+    logger.debug('Timestamp:', new Date().toISOString());
+    
     const storageKeys = this.getCredentialStorageKeys();
+    logger.debug('Storage keys:', storageKeys);
+    
     const apiKey = localStorage.getItem(storageKeys.apiKey!);
+    logger.debug('API key check:');
+    logger.debug('- Storage key used:', storageKeys.apiKey);
+    logger.debug('- API key exists:', !!apiKey);
+    logger.debug('- API key length:', apiKey?.length || 0);
+    logger.debug('- API key prefix:', apiKey?.substring(0, 8) + '...' || 'none');
+    
+    // Also check OAuth-related storage for debugging
+    const authMethod = localStorage.getItem('openrouter_auth_method');
+    const oauthToken = localStorage.getItem('openrouter_oauth_token');
+    logger.debug('OAuth-related storage:');
+    logger.debug('- Auth method:', authMethod);
+    logger.debug('- OAuth token exists:', !!oauthToken);
+    
+    // Check all OpenRouter-related localStorage keys
+    const allKeys = Object.keys(localStorage);
+    const openRouterKeys = allKeys.filter(key => key.includes('openrouter') || key.includes('ai_chat'));
+    logger.debug('All OpenRouter-related storage keys:');
+    openRouterKeys.forEach(key => {
+      const value = localStorage.getItem(key);
+      logger.debug(`- ${key}:`, value?.substring(0, 50) + (value && value.length > 50 ? '...' : '') || 'null');
+    });
     
     if (!apiKey) {
+      logger.warn('❌ OpenRouter API key missing');
       return {
         isValid: false,
         message: 'OpenRouter API key is required. Please add your API key in Settings.',
@@ -507,6 +544,7 @@ export class OpenRouterProvider extends LLMBaseProvider {
       };
     }
     
+    logger.info('✅ OpenRouter credentials validation passed');
     return {
       isValid: true,
       message: 'OpenRouter credentials are configured correctly.'
@@ -517,8 +555,10 @@ export class OpenRouterProvider extends LLMBaseProvider {
    * Get the storage keys this provider uses for credentials
    */
   getCredentialStorageKeys(): {apiKey: string} {
-    return {
+    const keys = {
       apiKey: 'ai_chat_openrouter_api_key'
     };
+    logger.debug('OpenRouter credential storage keys:', keys);
+    return keys;
   }
 }
