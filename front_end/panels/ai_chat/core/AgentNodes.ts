@@ -467,8 +467,8 @@ export function createToolExecutorNode(state: AgentState): Runnable<AgentState, 
             parentObservationId: executionContext.parentObservationId,
             currentAgentSpanId: executionContext.currentAgentSpanId
           });
-        }
-        
+        }  
+              
         const result = await withTracingContext(executionContext, async () => {
           console.log(`[TOOL EXECUTION PATH 1] Inside withTracingContext for tool: ${toolName}`);
           return await selectedTool.execute(toolArgs as any);
