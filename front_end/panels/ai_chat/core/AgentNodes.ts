@@ -111,7 +111,7 @@ export function createAgentNode(modelName: string, temperature: number): Runnabl
       let generationId: string | undefined;
       const generationStartTime = new Date();
 
-      if (tracingContext?.traceId) {
+      if (tracingContext?.traceId) {        
         generationId = `gen-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
         await this.tracingProvider.createObservation({
           id: generationId,
@@ -134,7 +134,7 @@ export function createAgentNode(modelName: string, temperature: number): Runnabl
             } : null
           }
         }, tracingContext.traceId);
-        
+
         // Update tracing context with current generation ID
         tracingContext.currentGenerationId = generationId;
       }
