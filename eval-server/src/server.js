@@ -168,20 +168,26 @@ class EvaluationServer {
     try {
       const { clientId, secretKey, capabilities } = data;
 
+      // Parse composite client ID to extract base client ID and tab ID
+      const { baseClientId, tabId, isComposite } = this.clientManager.parseCompositeClientId(clientId);
+
       logger.info('Registration attempt', {
         clientId,
+        baseClientId,
+        tabId: tabId || 'default',
+        isComposite,
         hasSecretKey: !!secretKey,
         secretKey: secretKey ? '[REDACTED]' : 'none'
       });
 
-      // Check if client exists (don't validate secret key yet - that happens later)
-      const validation = this.clientManager.validateClient(clientId, null, true);
+      // Check if base client exists (don't validate secret key yet - that happens later)
+      const validation = this.clientManager.validateClient(baseClientId, null, true);
       if (!validation.valid) {
         if (validation.reason === 'Client not found') {
           // Auto-create new client configuration
           try {
-            logger.info('Auto-creating new client configuration', { clientId });
-            await this.clientManager.createClientWithId(clientId, `DevTools Client ${clientId.substring(0, 8)}`, 'hello');
+            logger.info('Auto-creating new client configuration', { baseClientId, clientId });
+            await this.clientManager.createClientWithId(baseClientId, `DevTools Client ${baseClientId.substring(0, 8)}`, 'hello');
 
             // Send rejection for first-time registration to allow server to set secret key
             this.sendMessage(connection.ws, {
@@ -219,7 +225,7 @@ class EvaluationServer {
       }
 
       // Get client info including the server's secret key for this client
-      const client = this.clientManager.getClient(clientId);
+      const client = this.clientManager.getClient(baseClientId);
       if (!client) {
         this.sendMessage(connection.ws, {
           type: 'registration_ack',
@@ -293,13 +299,25 @@ class EvaluationServer {
     const { clientId, verified } = data;
 
     if (verified) {
+      // Parse composite client ID to extract base client ID and tab ID
+      const { baseClientId, tabId, isComposite } = this.clientManager.parseCompositeClientId(clientId);
+      
       // Authentication successful - complete registration (skip secret validation since already verified)
-      const result = this.clientManager.registerClient(clientId, '', connection.capabilities, true);
+      const result = this.clientManager.registerClient(baseClientId, '', connection.capabilities, true);
 
       connection.registered = true;
       connection.awaitingAuth = false;
+      connection.compositeClientId = clientId;
+      connection.baseClientId = baseClientId;
+      connection.tabId = tabId;
 
-      // Move connection to use clientId as key
+      // Register tab with client manager
+      this.clientManager.registerTab(clientId, connection, {
+        remoteAddress: connection.remoteAddress,
+        userAgent: connection.userAgent || 'unknown'
+      });
+
+      // Move connection to use composite clientId as key
       this.connectedClients.delete(connection.id);
       this.connectedClients.set(clientId, connection);
 
@@ -309,10 +327,17 @@ class EvaluationServer {
         clientId,
         status: 'accepted',
         message: result.clientName ? `Welcome ${result.clientName}` : 'Client authenticated successfully',
-        evaluationsCount: result.evaluationsCount
+        evaluationsCount: result.evaluationsCount,
+        tabId: tabId,
+        isComposite: isComposite
       });
 
-      logger.info('Client authenticated and registered', { clientId });
+      logger.info('Client authenticated and registered', { 
+        clientId, 
+        baseClientId, 
+        tabId: tabId || 'default',
+        isComposite 
+      });
     } else {
       // Authentication failed
       this.sendMessage(connection.ws, {
@@ -330,8 +355,11 @@ class EvaluationServer {
   handleDisconnection(connection) {
     connection.rpcClient.cleanup();
 
-    // Remove by connection ID or client ID
-    if (connection.registered && connection.clientId) {
+    // Unregister tab if this was a registered connection
+    if (connection.registered && connection.compositeClientId) {
+      this.clientManager.unregisterTab(connection.compositeClientId);
+      this.connectedClients.delete(connection.compositeClientId);
+    } else if (connection.clientId) {
       this.connectedClients.delete(connection.clientId);
     } else {
       this.connectedClients.delete(connection.id);
@@ -340,8 +368,11 @@ class EvaluationServer {
     logConnection({
       event: 'disconnected',
       connectionId: connection.id,
-      clientId: connection.clientId,
-      totalConnections: this.connectedClients.size
+      clientId: connection.compositeClientId || connection.clientId,
+      baseClientId: connection.baseClientId,
+      tabId: connection.tabId,
+      totalConnections: this.connectedClients.size,
+      totalTabs: this.clientManager.getTotalTabCount()
     });
   }
 
@@ -603,10 +634,15 @@ class EvaluationServer {
   }
 
   getStatus() {
+    const connections = Array.from(this.connectedClients.values());
+    const readyClients = connections.filter(client => client.ready).length;
+    const uniqueBaseClients = new Set(connections.map(c => c.baseClientId).filter(Boolean)).size;
+    
     return {
       connectedClients: this.connectedClients.size,
-      readyClients: Array.from(this.connectedClients.values())
-        .filter(client => client.ready).length,
+      uniqueBaseClients: uniqueBaseClients,
+      totalTabs: this.clientManager.getTotalTabCount(),
+      readyClients: readyClients,
       activeEvaluations: this.activeEvaluations
     };
   }

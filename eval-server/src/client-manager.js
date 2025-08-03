@@ -11,6 +11,7 @@ class ClientManager {
     this.clients = new Map();
     this.evaluations = new Map(); // clientId -> evaluations array
     this.configDefaults = null; // Config.yaml defaults for model precedence
+    this.activeTabs = new Map(); // clientId -> Set of { tabId, connection, metadata }
     
     // Ensure directories exist
     if (!fs.existsSync(this.clientsDir)) {
@@ -360,6 +361,153 @@ class ClientManager {
     
     logger.debug('Client validation successful', { clientId });
     return { valid: true };
+  }
+
+  /**
+   * Parse composite client ID to extract base client ID and tab ID
+   * Format: baseClientId:tabId
+   */
+  parseCompositeClientId(compositeClientId) {
+    if (compositeClientId.includes(':')) {
+      const [baseClientId, tabId] = compositeClientId.split(':', 2);
+      return { baseClientId, tabId, isComposite: true };
+    }
+    return { baseClientId: compositeClientId, tabId: null, isComposite: false };
+  }
+
+  /**
+   * Register a tab for a client
+   */
+  registerTab(compositeClientId, connection, metadata = {}) {
+    const { baseClientId, tabId } = this.parseCompositeClientId(compositeClientId);
+    
+    if (!this.activeTabs.has(baseClientId)) {
+      this.activeTabs.set(baseClientId, new Set());
+    }
+    
+    const tabs = this.activeTabs.get(baseClientId);
+    const tabInfo = {
+      tabId: tabId || 'default',
+      compositeClientId,
+      connection,
+      connectedAt: new Date().toISOString(),
+      ...metadata
+    };
+    
+    // Remove existing tab with same ID if it exists
+    tabs.forEach(existingTab => {
+      if (existingTab.tabId === tabInfo.tabId) {
+        tabs.delete(existingTab);
+      }
+    });
+    
+    tabs.add(tabInfo);
+    
+    logger.info('Tab registered', {
+      baseClientId,
+      tabId: tabInfo.tabId,
+      compositeClientId,
+      totalTabs: tabs.size
+    });
+    
+    return tabInfo;
+  }
+
+  /**
+   * Unregister a tab for a client
+   */
+  unregisterTab(compositeClientId) {
+    const { baseClientId, tabId } = this.parseCompositeClientId(compositeClientId);
+    
+    if (!this.activeTabs.has(baseClientId)) {
+      return false;
+    }
+    
+    const tabs = this.activeTabs.get(baseClientId);
+    const targetTabId = tabId || 'default';
+    
+    let removed = false;
+    tabs.forEach(tab => {
+      if (tab.tabId === targetTabId) {
+        tabs.delete(tab);
+        removed = true;
+      }
+    });
+    
+    // Remove client entry if no tabs remain
+    if (tabs.size === 0) {
+      this.activeTabs.delete(baseClientId);
+    }
+    
+    if (removed) {
+      logger.info('Tab unregistered', {
+        baseClientId,
+        tabId: targetTabId,
+        compositeClientId,
+        remainingTabs: tabs.size
+      });
+    }
+    
+    return removed;
+  }
+
+  /**
+   * Get all active tabs for a client
+   */
+  getClientTabs(baseClientId) {
+    const tabs = this.activeTabs.get(baseClientId);
+    return tabs ? Array.from(tabs) : [];
+  }
+
+  /**
+   * Get all clients with their active tabs
+   */
+  getAllClientsWithTabs() {
+    const result = [];
+    
+    for (const [baseClientId, tabs] of this.activeTabs) {
+      const client = this.clients.get(baseClientId);
+      if (client) {
+        result.push({
+          ...client,
+          baseClientId,
+          activeTabs: Array.from(tabs),
+          tabCount: tabs.size
+        });
+      }
+    }
+    
+    return result;
+  }
+
+  /**
+   * Get a specific tab by composite client ID
+   */
+  getTab(compositeClientId) {
+    const { baseClientId, tabId } = this.parseCompositeClientId(compositeClientId);
+    const tabs = this.activeTabs.get(baseClientId);
+    
+    if (!tabs) return null;
+    
+    const targetTabId = tabId || 'default';
+    for (const tab of tabs) {
+      if (tab.tabId === targetTabId) {
+        return tab;
+      }
+    }
+    
+    return null;
+  }
+
+  /**
+   * Get total tab count across all clients
+   */
+  getTotalTabCount() {
+    let total = 0;
+    for (const tabs of this.activeTabs.values()) {
+      total += tabs.size;
+    }
+    return total;
   }
 }
 

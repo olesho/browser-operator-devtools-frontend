@@ -1,0 +1,16 @@
+
+> bo-eval-server@1.0.0 start
+> node src/server.js
+
+[32minfo[39m: Loaded config.yaml defaults: {"model":{"main_model":"gpt-4.1","mini_model":"gpt-4.1-mini","nano_model":"gpt-4.1-nano","provider":"openai"},"service":"bo-eval-server","timestamp":"2025-07-21T21:01:02.118Z"}
+[32minfo[39m: Loaded client 1233ae25-9f9e-4f77-924d-865f7d615cef {"service":"bo-eval-server","timestamp":"2025-07-21T21:01:02.121Z"}
+[32minfo[39m: Loaded 1 clients {"service":"bo-eval-server","timestamp":"2025-07-21T21:01:02.121Z"}
+[32minfo[39m: Loaded client 1233ae25-9f9e-4f77-924d-865f7d615cef with 146 evaluations {"service":"bo-eval-server","timestamp":"2025-07-21T21:01:02.146Z"}
+[32minfo[39m: Loaded 146 evaluations from 7 categories {"service":"bo-eval-server","timestamp":"2025-07-21T21:01:02.146Z"}
+[32minfo[39m: Loaded config.yaml defaults: {"model":{"main_model":"gpt-4.1","mini_model":"gpt-4.1-mini","nano_model":"gpt-4.1-nano","provider":"openai"},"service":"bo-eval-server","timestamp":"2025-07-21T21:01:02.147Z"}
+[32minfo[39m: Evaluation server started on ws://localhost:8080 {"service":"bo-eval-server","timestamp":"2025-07-21T21:01:02.150Z"}
+[32minfo[39m: Evaluation processor started {"service":"bo-eval-server","timestamp":"2025-07-21T21:01:02.150Z"}
+[32minfo[39m: API server started on http://localhost:8081 {"service":"bo-eval-server","timestamp":"2025-07-21T21:01:02.151Z"}
+[32minfo[39m: Processing responses request: {"input":"What is 2+2?","modelConfig":{"main_model":"gpt-4o","mini_model":"gpt-4o-mini","nano_model":"gpt-4o-mini","provider":"openai"},"service":"bo-eval-server","timestamp":"2025-07-21T21:01:22.499Z"}
+[31merror[39m: Error handling responses request: No DevTools client is connected and ready. Please ensure a DevTools client is connected to the evaluation server. {"service":"bo-eval-server","stack":"Error: No DevTools client is connected and ready. Please ensure a DevTools client is connected to the evaluation server.\n    at APIServer.handleResponsesRequest (file:///Users/olehluchkiv/Work/browser/devtools/devtools-frontend/eval-server/src/api-server.js:277:15)\n    at APIServer.handleRequest (file:///Users/olehluchkiv/Work/browser/devtools/devtools-frontend/eval-server/src/api-server.js:122:31)\n    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)","timestamp":"2025-07-21T21:01:22.499Z"}
+[31merror[39m: API error: No DevTools client is connected and ready. Please ensure a DevTools client is connected to the evaluation server. {"service":"bo-eval-server","stack":"Error: No DevTools client is connected and ready. Please ensure a DevTools client is connected to the evaluation server.\n    at APIServer.handleResponsesRequest (file:///Users/olehluchkiv/Work/browser/devtools/devtools-frontend/eval-server/src/api-server.js:277:15)\n    at APIServer.handleRequest (file:///Users/olehluchkiv/Work/browser/devtools/devtools-frontend/eval-server/src/api-server.js:122:31)\n    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)","timestamp":"2025-07-21T21:01:22.499Z"}
