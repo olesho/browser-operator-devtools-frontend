@@ -37,7 +37,7 @@ class ClientManager {
         this.configDefaults = yaml.load(configContent);
         logger.info('Loaded config.yaml defaults:', this.configDefaults);
       } else {
-        logger.warn('config.yaml not found, no global defaults will be applied');
+        // Don't warn about missing config.yaml - it's optional
         this.configDefaults = null;
       }
     } catch (error) {
@@ -82,7 +82,12 @@ class ClientManager {
   loadAllClients() {
     try {
       const files = fs.readdirSync(this.clientsDir)
-        .filter(f => f.endsWith('.yaml') || f.endsWith('.yml'));
+        .filter(f => f.endsWith('.yaml') || f.endsWith('.yml'))
+        .filter(f => {
+          // Only load base client YAML files, not composite ones with tab IDs
+          const clientId = path.basename(f, path.extname(f));
+          return !clientId.includes(':');
+        });
       
       for (const file of files) {
         const clientId = path.basename(file, path.extname(file));

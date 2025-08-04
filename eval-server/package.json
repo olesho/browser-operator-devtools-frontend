@@ -2,14 +2,28 @@
   "name": "bo-eval-server",
   "version": "1.0.0",
   "description": "WebSocket server for evaluating LLM agents with LLM-as-a-judge",
-  "main": "src/server.js",
+  "main": "src/lib/EvalServer.js",
   "type": "module",
-  "scripts": {
-    "start": "node src/server.js",
-    "dev": "node --watch src/server.js",
-    "cli": "node src/cli.js"
+  "exports": {
+    ".": "./src/lib/EvalServer.js",
+    "./EvalServer": "./src/lib/EvalServer.js",
+    "./EvaluationLoader": "./src/lib/EvaluationLoader.js",
+    "./HTTPWrapper": "./src/lib/HTTPWrapper.js",
+    "./judges/Judge": "./src/lib/judges/Judge.js",
+    "./judges/LLMJudge": "./src/lib/judges/LLMJudge.js",
+    "./CLI": "./src/cli/CLI.js"
   },
-  "keywords": ["websocket", "llm", "evaluation", "rpc"],
+  "bin": {
+    "eval-server": "./src/cli/index.js"
+  },
+  "scripts": {
+    "start": "node examples/with-http-wrapper.js",
+    "dev": "node --watch examples/with-http-wrapper.js",
+    "cli": "node src/cli/index.js",
+    "lib:example": "node examples/library-usage.js",
+    "lib:example:http": "node examples/with-http-wrapper.js"
+  },
+  "keywords": ["websocket", "llm", "evaluation", "rpc", "library", "programmatic"],
   "author": "",
   "license": "MIT",
   "dependencies": {

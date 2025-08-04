@@ -2,56 +2,205 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import { EventEmitter } from 'events';
 import { v4 as uuidv4 } from 'uuid';
 import { WebSocketServer } from 'ws';
 
-import { APIServer } from './api-server.js';
-import { ClientManager } from './client-manager.js';
-import { CONFIG, validateConfig } from './config.js';
-import { LLMEvaluator } from './evaluator.js';
-import logger, { logConnection, logEvaluation } from './logger.js';
-import { RpcClient } from './rpc-client.js';
+import { ClientManager } from '../client-manager.js';
+import { CONFIG, validateConfig } from '../config.js';
+import logger, { logConnection, logEvaluation } from '../logger.js';
+import { RpcClient } from '../rpc-client.js';
+import { EvaluationLoader } from './EvaluationLoader.js';
 
-class EvaluationServer {
-  constructor() {
+/**
+ * EvalServer - A library for programmatically managing evaluation servers
+ * 
+ * Example usage:
+ * ```js
+ * const server = new EvalServer({
+ *   authKey: 'your-secret-key',
+ *   host: '127.0.0.1',
+ *   port: 8080
+ * });
+ * 
+ * server.onConnect(client => {
+ *   console.log(`Client connected: ${client.id}`);
+ *   
+ *   client.evaluate({
+ *     id: "test_eval",
+ *     name: "Bloomberg Eval",
+ *     description: "Test Eval for Bloomberg website",
+ *     input: {
+ *       objective: "Navigate to Bloomberg, summarize and return sentiment of the latest news."
+ *     }
+ *   }).then(response => {
+ *     console.log('Evaluation response:', response);
+ *   });
+ * });
+ * 
+ * server.start();
+ * ```
+ */
+export class EvalServer extends EventEmitter {
+  constructor(options = {}) {
+    super();
+    
+    // Apply configuration options
+    this.config = {
+      host: options.host || CONFIG.server.host,
+      port: options.port || CONFIG.server.port,
+      authKey: options.authKey || null,
+      clientsDir: options.clientsDir || './clients',
+      evalsDir: options.evalsDir || './evals',
+      ...options
+    };
+    
+    // Internal state
     this.connectedClients = new Map();
-    this.rpcClient = new RpcClient();
-    this.evaluator = new LLMEvaluator();
-    this.evaluationQueue = [];
-    this.activeEvaluations = 0;
-    this.clientManager = new ClientManager('./clients', './evals');
-    this.apiServer = new APIServer(this);
+    this.clientManager = new ClientManager(this.config.clientsDir, this.config.evalsDir);
+    this.evaluationLoader = new EvaluationLoader(this.config.evalsDir);
+    this.judge = null; // Judge is optional - can be set later
+    this.wss = null;
+    this.isRunning = false;
+    
+    // Bind methods
+    this.handleConnection = this.handleConnection.bind(this);
   }
 
-  start() {
-    // Validate configuration
-    const configErrors = validateConfig();
+  /**
+   * Start the evaluation server
+   */
+  async start() {
+    if (this.isRunning) {
+      throw new Error('Server is already running');
+    }
+
+    // Validate configuration - only require LLM if judge is configured
+    const configErrors = validateConfig(!!this.judge);
     if (configErrors.length > 0) {
-      logger.error('Configuration errors:', configErrors);
-      process.exit(1);
+      throw new Error(`Configuration errors: ${configErrors.join(', ')}`);
     }
 
     // Create WebSocket server
     this.wss = new WebSocketServer({
-      port: CONFIG.server.port,
-      host: CONFIG.server.host
+      port: this.config.port,
+      host: this.config.host
     });
 
-    this.wss.on('connection', this.handleConnection.bind(this));
+    this.wss.on('connection', this.handleConnection);
     this.wss.on('error', error => {
       logger.error('WebSocket server error', { error: error.message });
+      this.emit('error', error);
     });
 
-    logger.info(`Evaluation server started on ws://${CONFIG.server.host}:${CONFIG.server.port}`);
+    this.isRunning = true;
+    logger.info(`Evaluation server started on ws://${this.config.host}:${this.config.port}`);
+    this.emit('started', { host: this.config.host, port: this.config.port });
 
-    // Start API server
-    this.apiServer.start();
-
-    this.startEvaluationProcessor();
+    return this;
   }
 
+  /**
+   * Stop the evaluation server
+   */
+  async stop() {
+    if (!this.isRunning) {
+      return;
+    }
+
+    if (this.wss) {
+      this.wss.close();
+      this.wss = null;
+    }
+
+    // Close all client connections
+    for (const [clientId, connection] of this.connectedClients) {
+      connection.rpcClient.cleanup();
+      if (connection.ws.readyState === connection.ws.OPEN) {
+        connection.ws.close();
+      }
+    }
+    this.connectedClients.clear();
+
+    this.isRunning = false;
+    logger.info('Evaluation server stopped');
+    this.emit('stopped');
+  }
+
+  /**
+   * Register a callback for when clients connect
+   * @param {Function} callback - Called with a ClientProxy instance
+   */
+  onConnect(callback) {
+    this.on('clientConnected', callback);
+    return this;
+  }
+
+  /**
+   * Register a callback for when clients disconnect
+   * @param {Function} callback - Called with client info
+   */
+  onDisconnect(callback) {
+    this.on('clientDisconnected', callback);
+    return this;
+  }
+
+  /**
+   * Set the judge for evaluations (optional)
+   * @param {Judge} judge - Judge instance for evaluation validation
+   */
+  setJudge(judge) {
+    // If server is already running, validate LLM config when setting judge
+    if (this.isRunning) {
+      const configErrors = validateConfig(true);
+      if (configErrors.length > 0) {
+        throw new Error(`Cannot set judge: ${configErrors.join(', ')}`);
+      }
+    }
+    
+    this.judge = judge;
+    return this;
+  }
+
+
+  /**
+   * Get current server status
+   */
+  getStatus() {
+    const connections = Array.from(this.connectedClients.values());
+    const readyClients = connections.filter(client => client.ready).length;
+    const uniqueBaseClients = new Set(connections.map(c => c.baseClientId).filter(Boolean)).size;
+    
+    return {
+      isRunning: this.isRunning,
+      connectedClients: this.connectedClients.size,
+      uniqueBaseClients: uniqueBaseClients,
+      totalTabs: this.clientManager.getTotalTabCount(),
+      readyClients: readyClients,
+      host: this.config.host,
+      port: this.config.port
+    };
+  }
+
+  /**
+   * Load evaluations from YAML files
+   */
+  async loadEvaluations(evalsDir = './evals') {
+    return this.evaluationLoader.loadFromDirectory(evalsDir);
+  }
+
+  /**
+   * Get all available evaluations
+   */
+  getEvaluations() {
+    return this.evaluationLoader.getAllEvaluations();
+  }
+
+  /**
+   * Handle new WebSocket connections
+   */
   handleConnection(ws, request) {
-    const connectionId = uuidv4(); // Temporary ID until registration
+    const connectionId = uuidv4();
     const connection = {
       id: connectionId,
       ws,
@@ -62,7 +211,6 @@ class EvaluationServer {
       clientId: null
     };
 
-    // Store temporarily with connection ID
     this.connectedClients.set(connectionId, connection);
 
     logConnection({
@@ -97,17 +245,18 @@ class EvaluationServer {
     });
   }
 
+  /**
+   * Handle incoming messages from clients
+   */
   async handleMessage(connection, message) {
     try {
-      // Parse message first
       const data = JSON.parse(message);
 
-      // Try to handle as RPC response first
+      // Handle RPC responses
       if (data.jsonrpc === '2.0' && (data.result || data.error) && data.id) {
         if (connection.rpcClient.handleResponse(message)) {
           return;
         }
-        // If RPC client couldn't handle it, log but don't treat as unknown
         logger.debug('RPC response could not be handled', {
           connectionId: connection.id,
           clientId: connection.clientId,
@@ -138,8 +287,10 @@ class EvaluationServer {
           logger.info('Client ready for evaluations', {
             clientId: connection.clientId
           });
-          // Don't automatically start evaluations - wait for manual trigger
-          // this.processClientEvaluations(connection.clientId);
+          
+          // Create client proxy and emit connection event
+          const clientProxy = new ClientProxy(connection, this);
+          this.emit('clientConnected', clientProxy);
           break;
         case 'status':
           this.handleStatusUpdate(connection, data);
@@ -151,24 +302,23 @@ class EvaluationServer {
           logger.warn('Unknown message type', {
             connectionId: connection.id,
             clientId: connection.clientId,
-            type: data.type,
-            messageKeys: Object.keys(data)
+            type: data.type
           });
       }
     } catch (error) {
       logger.warn('Failed to parse message', {
         connectionId: connection.id,
-        error: error.message,
-        messageLength: message.length
+        error: error.message
       });
     }
   }
 
+  /**
+   * Handle client registration
+   */
   async handleRegistration(connection, data) {
     try {
       const { clientId, secretKey, capabilities } = data;
-
-      // Parse composite client ID to extract base client ID and tab ID
       const { baseClientId, tabId, isComposite } = this.clientManager.parseCompositeClientId(clientId);
 
       logger.info('Registration attempt', {
@@ -176,11 +326,10 @@ class EvaluationServer {
         baseClientId,
         tabId: tabId || 'default',
         isComposite,
-        hasSecretKey: !!secretKey,
-        secretKey: secretKey ? '[REDACTED]' : 'none'
+        hasSecretKey: !!secretKey
       });
 
-      // Check if base client exists (don't validate secret key yet - that happens later)
+      // Check if base client exists
       const validation = this.clientManager.validateClient(baseClientId, null, true);
       if (!validation.valid) {
         if (validation.reason === 'Client not found') {
@@ -189,7 +338,6 @@ class EvaluationServer {
             logger.info('Auto-creating new client configuration', { baseClientId, clientId });
             await this.clientManager.createClientWithId(baseClientId, `DevTools Client ${baseClientId.substring(0, 8)}`, 'hello');
 
-            // Send rejection for first-time registration to allow server to set secret key
             this.sendMessage(connection.ws, {
               type: 'registration_ack',
               clientId,
@@ -197,7 +345,6 @@ class EvaluationServer {
               reason: 'New client created. Please reconnect to complete registration.',
               newClient: true
             });
-            logger.info('New client configuration created, requesting reconnection', { clientId });
             return;
           } catch (error) {
             this.sendMessage(connection.ws, {
@@ -206,7 +353,6 @@ class EvaluationServer {
               status: 'rejected',
               reason: `Failed to create client configuration: ${error.message}`
             });
-            logger.error('Failed to auto-create client', { clientId, error: error.message });
             return;
           }
         } else {
@@ -216,15 +362,11 @@ class EvaluationServer {
             status: 'rejected',
             reason: validation.reason
           });
-          logger.warn('Client registration rejected', {
-            clientId,
-            reason: validation.reason
-          });
           return;
         }
       }
 
-      // Get client info including the server's secret key for this client
+      // Get client info
       const client = this.clientManager.getClient(baseClientId);
       if (!client) {
         this.sendMessage(connection.ws, {
@@ -245,15 +387,9 @@ class EvaluationServer {
         message: 'Please verify secret key'
       });
 
-      // Store connection info but don't register yet
       connection.clientId = clientId;
       connection.capabilities = capabilities;
       connection.awaitingAuth = true;
-
-      logger.info('Client registered successfully', {
-        clientId,
-        capabilities: capabilities?.tools?.join(', ')
-      });
 
     } catch (error) {
       logger.error('Registration error', { error: error.message });
@@ -266,43 +402,19 @@ class EvaluationServer {
     }
   }
 
-  handleStatusUpdate(connection, data) {
-    if (!connection.registered) {return;}
-
-    const { evaluationId, status, progress, message } = data;
-
-    logger.info('Evaluation status update', {
-      clientId: connection.clientId,
-      evaluationId,
-      status,
-      progress,
-      message
-    });
-
-    // Update evaluation status in client manager
-    this.clientManager.updateEvaluationStatus(
-      connection.clientId,
-      evaluationId,
-      status
-    );
-  }
-
+  /**
+   * Handle auth verification
+   */
   handleAuthVerification(connection, data) {
     if (!connection.awaitingAuth) {
-      logger.warn('Received auth verification from non-awaiting connection', {
-        connectionId: connection.id,
-        clientId: connection.clientId
-      });
       return;
     }
 
     const { clientId, verified } = data;
 
     if (verified) {
-      // Parse composite client ID to extract base client ID and tab ID
       const { baseClientId, tabId, isComposite } = this.clientManager.parseCompositeClientId(clientId);
       
-      // Authentication successful - complete registration (skip secret validation since already verified)
       const result = this.clientManager.registerClient(baseClientId, '', connection.capabilities, true);
 
       connection.registered = true;
@@ -321,7 +433,6 @@ class EvaluationServer {
       this.connectedClients.delete(connection.id);
       this.connectedClients.set(clientId, connection);
 
-      // Send final acknowledgment
       this.sendMessage(connection.ws, {
         type: 'registration_ack',
         clientId,
@@ -339,7 +450,6 @@ class EvaluationServer {
         isComposite 
       });
     } else {
-      // Authentication failed
       this.sendMessage(connection.ws, {
         type: 'registration_ack',
         clientId,
@@ -347,15 +457,39 @@ class EvaluationServer {
         reason: 'Secret key verification failed'
       });
 
-      logger.warn('Client authentication failed', { clientId });
       connection.ws.close(1008, 'Authentication failed');
     }
   }
 
+  /**
+   * Handle status updates
+   */
+  handleStatusUpdate(connection, data) {
+    if (!connection.registered) return;
+
+    const { evaluationId, status, progress, message } = data;
+
+    logger.info('Evaluation status update', {
+      clientId: connection.clientId,
+      evaluationId,
+      status,
+      progress,
+      message
+    });
+
+    this.clientManager.updateEvaluationStatus(
+      connection.clientId,
+      evaluationId,
+      status
+    );
+  }
+
+  /**
+   * Handle client disconnection
+   */
   handleDisconnection(connection) {
     connection.rpcClient.cleanup();
 
-    // Unregister tab if this was a registered connection
     if (connection.registered && connection.compositeClientId) {
       this.clientManager.unregisterTab(connection.compositeClientId);
       this.connectedClients.delete(connection.compositeClientId);
@@ -371,59 +505,42 @@ class EvaluationServer {
       clientId: connection.compositeClientId || connection.clientId,
       baseClientId: connection.baseClientId,
       tabId: connection.tabId,
-      totalConnections: this.connectedClients.size,
-      totalTabs: this.clientManager.getTotalTabCount()
+      totalConnections: this.connectedClients.size
+    });
+
+    this.emit('clientDisconnected', {
+      clientId: connection.compositeClientId || connection.clientId,
+      baseClientId: connection.baseClientId,
+      tabId: connection.tabId
     });
   }
 
+  /**
+   * Send message to WebSocket client
+   */
   sendMessage(ws, data) {
     if (ws.readyState === ws.OPEN) {
       ws.send(JSON.stringify(data));
     }
   }
 
-  async processClientEvaluations(clientId) {
-    const client = this.connectedClients.get(clientId);
-    if (!client || !client.ready) {return;}
-
-    // Get next pending evaluation for this client
-    const evaluation = this.clientManager.getNextEvaluation(clientId);
-    if (!evaluation) {
-      logger.info('No pending evaluations for client', { clientId });
-      return;
-    }
-
-    // Execute the evaluation
-    try {
-      await this.executeEvaluation(client, evaluation);
-
-      // Process next evaluation after a delay
-      setTimeout(() => {
-        this.processClientEvaluations(clientId);
-      }, 1000);
-    } catch (error) {
-      logger.error('Failed to execute evaluation', {
-        clientId,
-        evaluationId: evaluation.id,
-        error: error.message
-      });
-    }
-  }
-
-  async executeEvaluation(client, evaluation) {
+  /**
+   * Execute evaluation on a specific client
+   */
+  async executeEvaluation(connection, evaluation) {
     const startTime = Date.now();
     const rpcId = `rpc-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 
     try {
       logger.info('Starting evaluation', {
-        clientId: client.clientId,
+        clientId: connection.clientId,
         evaluationId: evaluation.id,
         tool: evaluation.tool
       });
 
       // Update status to running
       this.clientManager.updateEvaluationStatus(
-        client.clientId,
+        connection.clientId,
         evaluation.id,
         'running'
       );
@@ -438,7 +555,7 @@ class EvaluationServer {
           url: evaluation.target?.url || evaluation.url,
           tool: evaluation.tool,
           input: evaluation.input,
-          model: evaluation.model, // Include model configuration
+          model: evaluation.model,
           timeout: evaluation.timeout || 30000,
           metadata: {
             tags: evaluation.metadata?.tags || [],
@@ -448,32 +565,23 @@ class EvaluationServer {
         id: rpcId
       };
 
-      // Send RPC request with proper timeout
-      const response = await client.rpcClient.callMethod(
-        client.ws,
+      // Send RPC request
+      const response = await connection.rpcClient.callMethod(
+        connection.ws,
         'evaluate',
         rpcRequest.params,
         evaluation.timeout || 45000
       );
 
-      logger.info('Evaluation response received', {
-        clientId: client.clientId,
-        evaluationId: evaluation.id,
-        executionTime: response.executionTime
-      });
-
-      // Validate response based on YAML configuration
+      // Validate response if needed and judge is available
       let validationResult = null;
-      if (evaluation.validation) {
-        validationResult = await this.validateResponse(
-          response,
-          evaluation
-        );
+      if (evaluation.validation && this.judge) {
+        validationResult = await this.validateResponse(response, evaluation);
       }
 
       // Update evaluation status
       this.clientManager.updateEvaluationStatus(
-        client.clientId,
+        connection.clientId,
         evaluation.id,
         'completed',
         {
@@ -486,7 +594,7 @@ class EvaluationServer {
       // Log evaluation
       logEvaluation({
         evaluationId: evaluation.id,
-        clientId: client.clientId,
+        clientId: connection.clientId,
         name: evaluation.name,
         tool: evaluation.tool,
         response,
@@ -495,19 +603,17 @@ class EvaluationServer {
         duration: Date.now() - startTime
       });
 
-      // Return the response for API server
       return response;
 
     } catch (error) {
       logger.error('Evaluation failed', {
-        clientId: client.clientId,
+        clientId: connection.clientId,
         evaluationId: evaluation.id,
         error: error.message
       });
 
-      // Update status to failed
       this.clientManager.updateEvaluationStatus(
-        client.clientId,
+        connection.clientId,
         evaluation.id,
         'failed',
         {
@@ -520,18 +626,27 @@ class EvaluationServer {
     }
   }
 
+  /**
+   * Validate response using configured judge
+   */
   async validateResponse(response, evaluation) {
+    if (!this.judge) {
+      logger.warn('Validation requested but no judge configured');
+      return {
+        type: 'no-judge',
+        result: { message: 'No judge configured for validation' },
+        passed: true // Assume passed if no judge
+      };
+    }
+
     const validation = evaluation.validation;
 
     if (validation.type === 'llm-judge' || validation.type === 'hybrid') {
-      const llmConfig = validation.llm_judge || validation.llm_judge;
-
-      // Prepare prompt with criteria
+      const llmConfig = validation.llm_judge;
       const criteria = llmConfig.criteria || [];
       const task = `${evaluation.name} - ${evaluation.description || ''}`;
 
-      // Use LLM evaluator
-      const judgeResult = await this.evaluator.evaluate(
+      const judgeResult = await this.judge.evaluate(
         task,
         JSON.stringify(response.output || response),
         {
@@ -543,137 +658,66 @@ class EvaluationServer {
       return {
         type: 'llm-judge',
         result: judgeResult,
-        passed: judgeResult.score >= 0.7 // Configurable threshold
+        passed: judgeResult.score >= 0.7
       };
     }
 
-    // Add other validation types as needed
     return null;
   }
+}
 
-  async evaluateAllClients(task) {
-    const readyClients = Array.from(this.connectedClients.values())
-      .filter(client => client.ready);
-
-    if (readyClients.length === 0) {
-      throw new Error('No ready clients available');
-    }
-
-    logger.info(`Starting evaluation for ${readyClients.length} clients`, { task });
-
-    // If task looks like an evaluation ID, run that specific evaluation
-    if (task && task.includes('-')) {
-      const evaluationPromises = readyClients.map(async client => {
-        try {
-          // Find the specific evaluation by ID
-          const evaluation = this.clientManager.getClientEvaluations(client.clientId)
-            .find(e => e.id === task);
-
-          if (!evaluation) {
-            logger.warn(`Evaluation '${task}' not found for client ${client.clientId}`);
-            return {
-              error: `Evaluation '${task}' not found`,
-              clientId: client.clientId
-            };
-          }
-
-          // Reset evaluation status to pending
-          this.clientManager.updateEvaluationStatus(client.clientId, evaluation.id, 'pending');
-
-          // Execute the specific evaluation
-          await this.executeEvaluation(client, evaluation);
-
-          return {
-            success: true,
-            clientId: client.clientId,
-            evaluationId: evaluation.id
-          };
-        } catch (error) {
-          return {
-            error: error.message,
-            clientId: client.clientId
-          };
-        }
-      });
-
-      const results = await Promise.all(evaluationPromises);
-
-      logger.info('Specific evaluation completed', {
-        evaluationId: task,
-        totalClients: readyClients.length,
-        successfulEvaluations: results.filter(r => !r.error).length,
-        failedEvaluations: results.filter(r => r.error).length
-      });
-
-      return results;
-    }
-
-    // Otherwise, process all pending evaluations (original behavior)
-    const evaluationPromises = readyClients.map(client =>
-      this.processClientEvaluations(client.clientId).catch(error => ({
-        error: error.message,
-        clientId: client.clientId
-      }))
-    );
-
-    const results = await Promise.all(evaluationPromises);
-
-    logger.info('Batch evaluation completed', {
-      totalClients: readyClients.length,
-      successfulEvaluations: results.filter(r => !r.error).length,
-      failedEvaluations: results.filter(r => r.error).length
-    });
-
-    return results;
+/**
+ * ClientProxy - Provides a convenient interface for interacting with connected clients
+ */
+class ClientProxy {
+  constructor(connection, server) {
+    this.connection = connection;
+    this.server = server;
+    this.id = connection.compositeClientId || connection.clientId;
+    this.tabId = connection.tabId;
+    this.baseClientId = connection.baseClientId;
   }
 
-  startEvaluationProcessor() {
-    // This method can be extended to process evaluation queues
-    // For now, it's a placeholder for future batch processing functionality
-    logger.info('Evaluation processor started');
+  /**
+   * Execute an evaluation on this client
+   */
+  async evaluate(evaluation) {
+    // Ensure evaluation has required fields
+    const fullEvaluation = {
+      id: evaluation.id || `eval-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+      name: evaluation.name || 'Dynamic Evaluation',
+      description: evaluation.description || 'Programmatically created evaluation',
+      enabled: true,
+      tool: evaluation.tool || 'chat',
+      timeout: evaluation.timeout || 45000,
+      input: evaluation.input || {},
+      model: evaluation.model || {},
+      validation: evaluation.validation || { type: 'none' },
+      metadata: evaluation.metadata || { tags: ['api', 'dynamic'] },
+      ...evaluation
+    };
+
+    return this.server.executeEvaluation(this.connection, fullEvaluation);
   }
 
-  getStatus() {
-    const connections = Array.from(this.connectedClients.values());
-    const readyClients = connections.filter(client => client.ready).length;
-    const uniqueBaseClients = new Set(connections.map(c => c.baseClientId).filter(Boolean)).size;
-    
+  /**
+   * Get client information
+   */
+  getInfo() {
     return {
-      connectedClients: this.connectedClients.size,
-      uniqueBaseClients: uniqueBaseClients,
-      totalTabs: this.clientManager.getTotalTabCount(),
-      readyClients: readyClients,
-      activeEvaluations: this.activeEvaluations
+      id: this.id,
+      tabId: this.tabId,
+      baseClientId: this.baseClientId,
+      connectedAt: this.connection.connectedAt,
+      remoteAddress: this.connection.remoteAddress,
+      capabilities: this.connection.capabilities
     };
   }
 
-  getClientManager() {
-    return this.clientManager;
-  }
-
-  stop() {
-    if (this.wss) {
-      this.wss.close();
-      logger.info('Evaluation server stopped');
-    }
-
-    if (this.apiServer) {
-      this.apiServer.stop();
-    }
+  /**
+   * Send a custom message to the client
+   */
+  sendMessage(data) {
+    this.server.sendMessage(this.connection.ws, data);
   }
 }
-
-// Start the server if this file is run directly
-if (import.meta.url === `file://${process.argv[1]}`) {
-  const server = new EvaluationServer();
-
-  process.on('SIGINT', () => {
-    logger.info('Received SIGINT, shutting down gracefully');
-    server.stop();
-    process.exit(0);
-  });
-
-  server.start();
-}
-
-export { EvaluationServer };
