@@ -309,6 +309,14 @@ See the `examples/` directory for complete working examples:
 - `with_stack.py` - Using evaluation stack for queuing
 - `programmatic_evals.py` - Creating evaluations in code
 
+## Evaluation Scripts
+
+The `evals/` directory contains ready-to-use evaluation scripts for various benchmarks:
+
+- `browsecomp_eval_server.py` - Browsecomp benchmark server (1,266 web browsing questions)
+  - Run with: `./evals/run_browsecomp_eval_server.sh`
+  - See `evals/README.md` for detailed usage
+
 ## Development
 
 ### Using uv
