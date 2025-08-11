@@ -22,29 +22,6 @@ const httpWrapper = new HTTPWrapper(evalServer, {
   host: '127.0.0.1'
 });
 
-evalServer.onConnect(async client => {
-  console.log('🎉 CLIENT CONNECTED!');
-  console.log('   - Client ID:', client.id);
-  console.log('   - Client tabId:', client.tabId);
-
-  try {
-    console.log('🔄 Starting evaluation...');
-    let response = await client.evaluate({
-      id: "test_eval",
-      name: "Capital of France", 
-      description: "Simple test evaluation",
-      tool: "chat",
-      input: {
-        message: "What is the capital of France?"
-      }
-    });
-    
-    console.log('✅ Evaluation completed!');
-    console.log('📊 Response:', JSON.stringify(response, null, 2));
-  } catch (error) {
-    console.log('❌ Evaluation failed:', error.message);
-  }
-});
 
 console.log('🔧 Starting EvalServer...');
 await evalServer.start();

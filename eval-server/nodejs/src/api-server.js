@@ -344,7 +344,7 @@ class APIServer {
       timeout: 1500000, // 25 minutes
       input: {
         message: input,
-        reasoning: 'OpenAI API request processing'
+        reasoning: 'API request processing'
       },
       model: modelConfig,
       validation: {

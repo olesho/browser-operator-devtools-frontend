@@ -12,7 +12,7 @@ import { createSystemPromptAsync, getAgentToolsFromState } from './GraphHelpers.
 import { createLogger } from './Logger.js';
 import type { AgentState } from './State.js';
 import type { Runnable } from './Types.js';
-import { createTracingProvider, withTracingContext } from '../tracing/TracingConfig.js';
+import { createTracingProvider, withTracingContext, getCurrentTracingContext } from '../tracing/TracingConfig.js';
 import type { TracingProvider } from '../tracing/TracingProvider.js';
 
 const logger = createLogger('AgentNodes');
@@ -399,8 +399,27 @@ export function createToolExecutorNode(state: AgentState): Runnable<AgentState, 
         });
         
         console.log(`[TOOL EXECUTION PATH 1] ToolExecutorNode about to execute tool: ${toolName}`);
+        console.error(`[TOOLEXECUTOR CRITICAL] Tool name: ${toolName}`);
+        console.error(`[TOOLEXECUTOR CRITICAL] Tool type: ${selectedTool.constructor.name}`);
+        console.error(`[TOOLEXECUTOR CRITICAL] Has tracing context: ${!!tracingContext}`);
+        console.error(`[TOOLEXECUTOR CRITICAL] Trace ID: ${tracingContext?.traceId}`);
+        if (toolName === 'web_task_agent' || toolName === 'direct_url_navigator_agent') {
+          console.error(`[TOOLEXECUTOR CRITICAL] *** SPECIALIZED AGENT EXECUTION IN TOOLEXECUTOR ***`);
+          console.error(`[TOOLEXECUTOR CRITICAL] This is where specialized agents should be traced!`);
+        }
+        
         const result = await withTracingContext(tracingContext, async () => {
           console.log(`[TOOL EXECUTION PATH 1] Inside withTracingContext for tool: ${toolName}`);
+          console.error(`[TOOLEXECUTOR CRITICAL] Inside withTracingContext, about to call tool.execute`);
+          console.error(`[TOOLEXECUTOR CRITICAL] Tool.execute method:`, selectedTool.execute.toString().substring(0, 200));
+          
+          // FORCE TRACING CONTEXT CHECK
+          const currentContext = getCurrentTracingContext();
+          console.error(`[TOOLEXECUTOR CRITICAL] Current tracing context inside withTracingContext:`, {
+            hasContext: !!currentContext,
+            traceId: currentContext?.traceId
+          });
+          
           return await selectedTool.execute(toolArgs as any);
         });
         console.log(`[TOOL EXECUTION PATH 1] ToolExecutorNode completed tool: ${toolName}`);

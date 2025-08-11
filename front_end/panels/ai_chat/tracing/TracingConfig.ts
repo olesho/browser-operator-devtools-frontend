@@ -173,10 +173,11 @@ export function createTracingProvider(): TracingProvider {
 
 /**
  * Thread-local tracing context for passing context to nested tool executions
+ * Uses a context stack to properly handle nested async operations
  */
 class TracingContextManager {
   private static instance: TracingContextManager;
-  private currentContext: any = null;
+  private contextStack: any[] = [];
 
   private constructor() {}
 
@@ -188,39 +189,58 @@ class TracingContextManager {
   }
 
   setContext(context: any): void {
-    this.currentContext = context;
+    this.contextStack.push(context);
   }
 
   getContext(): any {
-    return this.currentContext;
+    return this.contextStack.length > 0 ? this.contextStack[this.contextStack.length - 1] : null;
   }
 
   clearContext(): void {
-    this.currentContext = null;
+    this.contextStack = [];
+  }
+
+  private popContext(): any {
+    return this.contextStack.pop();
   }
 
   /**
    * Execute a function with a specific tracing context
    */
   async withContext<T>(context: any, fn: () => Promise<T>): Promise<T> {
-    const previousContext = this.currentContext;
+    const previousStackSize = this.contextStack.length;
     contextLogger.info('Setting tracing context:', { 
       hasContext: !!context, 
       traceId: context?.traceId,
-      previousContext: !!previousContext 
+      stackSize: previousStackSize
     });
     console.log('[TRACING DEBUG] Setting tracing context:', { 
       hasContext: !!context, 
       traceId: context?.traceId,
-      previousContext: !!previousContext 
+      stackSize: previousStackSize
     });
+    
     this.setContext(context);
     try {
-      return await fn();
+      const result = await fn();
+      console.log('[TRACING DEBUG] Function completed successfully, stack size:', this.contextStack.length);
+      return result;
     } finally {
-      this.setContext(previousContext);
-      contextLogger.info('Restored previous tracing context:', { hasPrevious: !!previousContext });
-      console.log('[TRACING DEBUG] Restored previous tracing context:', { hasPrevious: !!previousContext });
+      // Restore the stack to the previous size
+      while (this.contextStack.length > previousStackSize) {
+        this.popContext();
+      }
+      const currentContext = this.getContext();
+      contextLogger.info('Restored tracing context stack:', { 
+        stackSize: this.contextStack.length,
+        hasCurrentContext: !!currentContext,
+        currentTraceId: currentContext?.traceId
+      });
+      console.log('[TRACING DEBUG] Restored tracing context stack:', { 
+        stackSize: this.contextStack.length,
+        hasCurrentContext: !!currentContext,
+        currentTraceId: currentContext?.traceId
+      });
     }
   }
 }
@@ -268,6 +288,103 @@ declare global {
     getTracingConfig?: typeof getTracingConfig;
     setTracingConfig?: typeof setTracingConfig;
     isTracingEnabled?: typeof isTracingEnabled;
+  }
+}
+
+/**
+ * Utility function to wrap LLM calls with tracing for tools
+ * This provides consistent tracing for all tool LLM calls
+ */
+export async function tracedLLMCall(
+  llmCallFunction: () => Promise<any>,
+  options: {
+    toolName: string;
+    model: string;
+    provider: string;
+    temperature?: number;
+    input?: any;
+    metadata?: Record<string, any>;
+  }
+): Promise<any> {
+  const tracingContext = getCurrentTracingContext();
+  let generationId: string | undefined;
+  const generationStartTime = new Date();
+
+  if (tracingContext?.traceId && isTracingEnabled()) {
+    const tracingProvider = createTracingProvider();
+    generationId = `gen-tool-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    
+    try {
+      await tracingProvider.createObservation({
+        id: generationId,
+        name: `LLM Generation (Tool): ${options.toolName}`,
+        type: 'generation',
+        startTime: generationStartTime,
+        parentObservationId: tracingContext.parentObservationId,
+        model: options.model,
+        modelParameters: {
+          temperature: options.temperature ?? 0,
+          provider: options.provider
+        },
+        input: options.input || {},
+        metadata: {
+          executingTool: options.toolName,
+          phase: 'tool_llm_call',
+          source: 'TracingWrapper',
+          ...options.metadata
+        }
+      }, tracingContext.traceId);
+    } catch (error) {
+      logger.warn('Failed to create tool LLM generation start observation:', error);
+    }
+  }
+
+  try {
+    // Execute the actual LLM call
+    const result = await llmCallFunction();
+
+    // Update generation observation with output
+    if (generationId && tracingContext?.traceId && isTracingEnabled()) {
+      const tracingProvider = createTracingProvider();
+      try {
+        await tracingProvider.createObservation({
+          id: generationId,
+          name: `LLM Generation (Tool): ${options.toolName}`,
+          type: 'generation',
+          endTime: new Date(),
+          output: {
+            response: typeof result === 'string' ? result : JSON.stringify(result),
+            success: true
+          }
+        }, tracingContext.traceId);
+      } catch (error) {
+        logger.warn('Failed to update tool LLM generation observation:', error);
+      }
+    }
+
+    return result;
+  } catch (error) {
+    // Update generation observation with error
+    if (generationId && tracingContext?.traceId && isTracingEnabled()) {
+      const tracingProvider = createTracingProvider();
+      try {
+        await tracingProvider.createObservation({
+          id: generationId,
+          name: `LLM Generation (Tool): ${options.toolName}`,
+          type: 'generation',
+          endTime: new Date(),
+          output: {
+            error: error instanceof Error ? error.message : String(error),
+            success: false
+          },
+          error: error instanceof Error ? error.message : String(error)
+        }, tracingContext.traceId);
+      } catch (tracingError) {
+        logger.warn('Failed to update tool LLM generation error observation:', tracingError);
+      }
+    }
+    
+    throw error; // Re-throw the original error
   }
 }
 

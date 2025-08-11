@@ -199,7 +199,8 @@ export class AgentRunner {
         targetAgentArgs, // Use determined args
         targetRunnerConfig, // Pass the constructed config
         targetRunnerHooks,  // Pass the constructed hooks
-        targetAgentTool // Target agent is now the executing agent
+        targetAgentTool, // Target agent is now the executing agent
+        undefined // No tracing context for handoff (would need to be passed through)
     );
 
     logger.info('Handoff target agent ${targetAgentTool.name} finished. Result success: ${handoffResult.success}');
@@ -237,9 +238,43 @@ export class AgentRunner {
     args: ConfigurableAgentArgs,
     config: AgentRunnerConfig,
     hooks: AgentRunnerHooks,
-    executingAgent: ConfigurableAgentTool | null
+    executingAgent: ConfigurableAgentTool | null,
+    tracingContext?: any
   ): Promise<ConfigurableAgentResult> {
     const agentName = executingAgent?.name || 'Unknown';
+    
+    // CRITICAL DEBUG: Log every AgentRunner.run call 
+    console.error(`[AGENTRUNNER CRITICAL] AgentRunner.run() called for: ${agentName}`);
+    console.error(`[AGENTRUNNER CRITICAL] SystemPrompt preview: ${config.systemPrompt.substring(0, 100)}...`);
+    if (agentName === 'web_task_agent' || agentName === 'direct_url_navigator_agent') {
+      console.error(`[AGENTRUNNER CRITICAL] *** SPECIALIZED AGENT DETECTED: ${agentName} ***`);
+      console.error(`[AGENTRUNNER CRITICAL] This should generate the missing traces!`);
+      
+      // FORCE CREATE ENTRY TRACE to confirm this method is called
+      const tracingProvider = createTracingProvider();
+      try {
+        await tracingProvider.createObservation({
+          id: `entry-trace-${Date.now()}`,
+          name: `ENTRY TRACE: ${agentName} AgentRunner.run()`,
+          type: 'event',
+          startTime: new Date(),
+          input: {
+            agentName,
+            confirmed: 'AgentRunner.run() was called',
+            systemPromptPreview: config.systemPrompt.substring(0, 200)
+          },
+          metadata: {
+            entry: true,
+            agentName,
+            source: 'AgentRunner-Entry'
+          }
+        }, `entry-trace-${agentName}-${Date.now()}`);
+        console.error(`[AGENTRUNNER CRITICAL] ✅ ENTRY TRACE CREATED for ${agentName}`);
+      } catch (error) {
+        console.error(`[AGENTRUNNER CRITICAL] ❌ ENTRY TRACE FAILED for ${agentName}:`, error);
+      }
+    }
+    
     logger.info('Starting execution loop for agent: ${agentName}');
     const { apiKey, modelName, systemPrompt, tools, maxIterations, temperature } = config;
     const { prepareInitialMessages, createSuccessResult, createErrorResult } = hooks;
@@ -294,6 +329,11 @@ export class AgentRunner {
 
     for (iteration = 0; iteration < maxIterations; iteration++) {
       logger.info('${agentName} Iteration ${iteration + 1}/${maxIterations}');
+      
+      // CRITICAL DEBUG: Log every iteration start for specialized agents
+      if (agentName === 'web_task_agent' || agentName === 'direct_url_navigator_agent') {
+        console.error(`[AGENTRUNNER CRITICAL ITERATION] *** ${agentName} ITERATION ${iteration + 1}/${maxIterations} STARTING ***`);
+      }
 
       // Prepare prompt and call LLM
       const iterationInfo = `
@@ -309,6 +349,133 @@ export class AgentRunner {
       try {
         logger.info('${agentName} Calling LLM with ${messages.length} messages');
         
+        // Create generation observation for LLM call using passed context
+        let generationId: string | undefined;
+        const generationStartTime = new Date();
+
+        console.log(`[AGENTRUNNER DEBUG] Tracing context:`, { 
+          hasTracingContext: !!tracingContext, 
+          traceId: tracingContext?.traceId,
+          agentName 
+        });
+
+        // Try to get tracing context from getCurrentTracingContext if not passed explicitly
+        const effectiveTracingContext = tracingContext || getCurrentTracingContext();
+        console.log(`[AGENTRUNNER DEBUG] Effective tracing context:`, { 
+          passedContext: !!tracingContext,
+          currentContext: !!getCurrentTracingContext(),
+          effectiveContext: !!effectiveTracingContext, 
+          traceId: effectiveTracingContext?.traceId
+        });
+
+        // FORCE TRACING FOR SPECIALIZED AGENTS - TEMPORARY HACK TO DEBUG
+        const shouldForceTrace = !effectiveTracingContext?.traceId && (agentName === 'web_task_agent' || agentName === 'direct_url_navigator_agent');
+        const forceTraceId = shouldForceTrace ? `force-trace-${Date.now()}` : null;
+        
+        // CRITICAL DEBUG: Always trace specialized agents
+        const isSpecializedAgent = agentName === 'web_task_agent' || agentName === 'direct_url_navigator_agent';
+        if (isSpecializedAgent) {
+          console.error(`[AGENTRUNNER CRITICAL TRACE] *** ${agentName} ABOUT TO MAKE LLM CALL ***`);
+          console.error(`[AGENTRUNNER CRITICAL TRACE] - Iteration: ${iteration + 1}/${maxIterations}`);
+          console.error(`[AGENTRUNNER CRITICAL TRACE] - System prompt preview: ${currentSystemPrompt.substring(0, 200)}...`);
+          console.error(`[AGENTRUNNER CRITICAL TRACE] - Messages count: ${messages.length}`);
+          console.error(`[AGENTRUNNER CRITICAL TRACE] - Tracing context: ${JSON.stringify(effectiveTracingContext)}`);
+          console.error(`[AGENTRUNNER CRITICAL TRACE] - Should force trace: ${shouldForceTrace}`);
+          
+          // FORCE CREATE TRACE for EVERY specialized agent call
+          console.error(`[AGENTRUNNER CRITICAL TRACE] ⚠️  FORCING TRACE CREATION FOR SPECIALIZED AGENT ⚠️`);
+          const forceTraceId = `force-${agentName}-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+          const tracingProvider = createTracingProvider();
+          try {
+            generationId = `force-gen-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+            await tracingProvider.createObservation({
+              id: generationId,
+              name: `FORCED TRACE: ${agentName} LLM Generation`,
+              type: 'generation',
+              startTime: generationStartTime,
+              model: modelName,
+              modelParameters: {
+                temperature: temperature ?? 0,
+                provider: AIChatPanel.getProviderForModel(modelName)
+              },
+              input: {
+                systemPrompt: currentSystemPrompt, // Full prompt
+                messages: messages.length,
+                tools: toolSchemas.length,
+                agentName,
+                iteration: iteration + 1,
+                FORCED_SPECIALIZED_AGENT: true
+              },
+              metadata: {
+                forced: true,
+                executingAgent: agentName,
+                iteration,
+                phase: 'llm_call',
+                source: 'AgentRunner-Forced',
+                isSpecializedAgent: true
+              }
+            }, forceTraceId);
+            console.error(`[AGENTRUNNER CRITICAL TRACE] ✅ FORCED TRACE CREATED: ${forceTraceId}`);
+          } catch (error) {
+            console.error(`[AGENTRUNNER CRITICAL TRACE] ❌ FORCED TRACE FAILED:`, error);
+            console.error(`[AGENTRUNNER CRITICAL TRACE] ❌ Error details:`, JSON.stringify(error, null, 2));
+          }
+        }
+        
+        if (effectiveTracingContext?.traceId || shouldForceTrace) {
+          const finalTraceId = effectiveTracingContext?.traceId || forceTraceId;
+          const finalContext = effectiveTracingContext || { 
+            traceId: forceTraceId, 
+            parentObservationId: undefined 
+          };
+          const tracingProvider = createTracingProvider();
+          generationId = `gen-agent-runner-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+          console.log(`[AGENTRUNNER DEBUG] Creating generation observation:`, { generationId, traceId: finalTraceId });
+          
+          try {
+            console.error(`[AGENTRUNNER CRITICAL TRACING] *** ATTEMPTING TO CREATE GENERATION OBSERVATION ***`);
+            console.error(`[AGENTRUNNER CRITICAL TRACING] - Agent: ${agentName}`);
+            console.error(`[AGENTRUNNER CRITICAL TRACING] - Generation ID: ${generationId}`);
+            console.error(`[AGENTRUNNER CRITICAL TRACING] - Trace ID: ${finalTraceId}`);
+            console.error(`[AGENTRUNNER CRITICAL TRACING] - System prompt preview: ${currentSystemPrompt.substring(0, 100)}...`);
+            
+            await tracingProvider.createObservation({
+              id: generationId,
+              name: `LLM Generation (AgentRunner): ${agentName}`,
+              type: 'generation',
+              startTime: generationStartTime,
+              parentObservationId: finalContext.parentObservationId,
+              model: modelName,
+              modelParameters: {
+                temperature: temperature ?? 0,
+                provider: AIChatPanel.getProviderForModel(modelName)
+              },
+              input: {
+                systemPrompt: currentSystemPrompt, // Don't truncate for debugging
+                messages: messages.length,
+                tools: toolSchemas.length,
+                agentName,
+                iteration,
+                SPECIALIZED_AGENT_MARKER: isSpecializedAgent ? 'YES' : 'NO'
+              },
+              metadata: {
+                executingAgent: agentName,
+                iteration,
+                phase: 'llm_call',
+                source: 'AgentRunner',
+                isSpecializedAgent
+              }
+            }, finalTraceId);
+            
+            console.error(`[AGENTRUNNER CRITICAL TRACING] ✅ GENERATION OBSERVATION CREATED SUCCESSFULLY`);
+          } catch (tracingError) {
+            console.error(`[AGENTRUNNER CRITICAL TRACING] ❌ GENERATION OBSERVATION FAILED:`, tracingError);
+            console.error(`[AGENTRUNNER CRITICAL TRACING] ❌ Error details:`, JSON.stringify(tracingError, null, 2));
+          }
+        } else {
+          console.log(`[AGENTRUNNER DEBUG] No tracing context available, skipping tracing`);
+        }
+        
         const llm = LLMClient.getInstance();
         const provider = AIChatPanel.getProviderForModel(modelName);
         const llmMessages = AgentRunner.convertToLLMMessages(messages);
@@ -321,6 +488,35 @@ export class AgentRunner {
           tools: toolSchemas,
           temperature: temperature ?? 0,
         });
+        
+        // CRITICAL DEBUG: Confirm LLM call completed
+        if (isSpecializedAgent) {
+          console.error(`[AGENTRUNNER CRITICAL TRACE] *** ${agentName} LLM CALL COMPLETED ***`);
+          console.error(`[AGENTRUNNER CRITICAL TRACE] - Response type: ${llmResponse ? typeof llmResponse : 'null'}`);
+          console.error(`[AGENTRUNNER CRITICAL TRACE] - Response text preview: ${llmResponse?.text?.substring(0, 100) || 'NO TEXT'}...`);
+        }
+
+        // Update generation observation with output
+        if (generationId && (effectiveTracingContext?.traceId || shouldForceTrace)) {
+          const finalTraceId = effectiveTracingContext?.traceId || forceTraceId;
+          const tracingProvider = createTracingProvider();
+          try {
+            await tracingProvider.createObservation({
+              id: generationId,
+              name: `LLM Generation (AgentRunner): ${agentName}`, // Include name when updating
+              type: 'generation',
+              endTime: new Date(),
+              output: {
+                response: llmResponse.text || 'No text response',
+                reasoning: llmResponse.reasoning?.summary
+              },
+              // Note: Usage tracking would need to be extracted from llmResponse if available
+            }, finalTraceId);
+            console.log(`[AGENTRUNNER DEBUG] Successfully updated generation observation with output`);
+          } catch (tracingError) {
+            console.error(`[AGENTRUNNER DEBUG] Failed to update generation observation:`, tracingError);
+          }
+        }
       } catch (error: any) {
         logger.error(`${agentName} LLM call failed:`, error);
         const errorMsg = `LLM call failed: ${error.message || String(error)}`;
