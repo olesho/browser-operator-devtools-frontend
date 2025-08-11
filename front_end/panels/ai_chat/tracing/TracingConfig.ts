@@ -214,17 +214,10 @@ class TracingContextManager {
       traceId: context?.traceId,
       stackSize: previousStackSize
     });
-    console.log('[TRACING DEBUG] Setting tracing context:', { 
-      hasContext: !!context, 
-      traceId: context?.traceId,
-      stackSize: previousStackSize
-    });
     
     this.setContext(context);
     try {
-      const result = await fn();
-      console.log('[TRACING DEBUG] Function completed successfully, stack size:', this.contextStack.length);
-      return result;
+      return await fn();
     } finally {
       // Restore the stack to the previous size
       while (this.contextStack.length > previousStackSize) {
@@ -232,11 +225,6 @@ class TracingContextManager {
       }
       const currentContext = this.getContext();
       contextLogger.info('Restored tracing context stack:', { 
-        stackSize: this.contextStack.length,
-        hasCurrentContext: !!currentContext,
-        currentTraceId: currentContext?.traceId
-      });
-      console.log('[TRACING DEBUG] Restored tracing context stack:', { 
         stackSize: this.contextStack.length,
         hasCurrentContext: !!currentContext,
         currentTraceId: currentContext?.traceId

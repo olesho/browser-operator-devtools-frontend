@@ -97,15 +97,7 @@ export class LangfuseProvider extends TracingProvider {
     observation: ObservationData,
     traceId: string
   ): Promise<void> {
-    console.error(`[LANGFUSE CRITICAL] *** createObservation CALLED ***`);
-    console.error(`[LANGFUSE CRITICAL] - Observation ID: ${observation.id}`);
-    console.error(`[LANGFUSE CRITICAL] - Observation type: ${observation.type}`);
-    console.error(`[LANGFUSE CRITICAL] - Observation name: ${observation.name}`);
-    console.error(`[LANGFUSE CRITICAL] - Trace ID: ${traceId}`);
-    console.error(`[LANGFUSE CRITICAL] - Enabled: ${this.enabled}`);
-    
     if (!this.enabled) {
-      console.error(`[LANGFUSE CRITICAL] ❌ PROVIDER NOT ENABLED - SKIPPING`);
       return;
     }
 
@@ -229,11 +221,6 @@ export class LangfuseProvider extends TracingProvider {
   }
 
   private async sendBatch(events: LangfuseEvent[]): Promise<void> {
-    console.error(`[LANGFUSE CRITICAL] *** ATTEMPTING TO SEND BATCH ***`);
-    console.error(`[LANGFUSE CRITICAL] - Events count: ${events.length}`);
-    console.error(`[LANGFUSE CRITICAL] - Endpoint: ${this.endpoint}`);
-    console.error(`[LANGFUSE CRITICAL] - Public key: ${this.publicKey.substring(0, 10)}...`);
-    
     const batch: LangfuseBatch = {
       batch: events,
       metadata: {
@@ -242,41 +229,22 @@ export class LangfuseProvider extends TracingProvider {
       }
     };
 
-    console.error(`[LANGFUSE CRITICAL] - Batch size: ${JSON.stringify(batch).length} chars`);
-    
-    try {
-      const response = await fetch(`${this.endpoint}/api/public/ingestion`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Basic ' + btoa(`${this.publicKey}:${this.secretKey}`)
-        },
-        body: JSON.stringify(batch)
-      });
+    const response = await fetch(`${this.endpoint}/api/public/ingestion`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Basic ' + btoa(`${this.publicKey}:${this.secretKey}`)
+      },
+      body: JSON.stringify(batch)
+    });
 
-      console.error(`[LANGFUSE CRITICAL] - Response status: ${response.status}`);
-      console.error(`[LANGFUSE CRITICAL] - Response OK: ${response.ok}`);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error(`[LANGFUSE CRITICAL] ❌ INGESTION FAILED: ${response.status} ${errorText}`);
-        throw new Error(`Langfuse ingestion failed: ${response.status} ${errorText}`);
-      }
-      
-      console.error(`[LANGFUSE CRITICAL] ✅ BATCH SENT SUCCESSFULLY`);
-    } catch (error) {
-      console.error(`[LANGFUSE CRITICAL] ❌ BATCH SEND ERROR:`, error);
-      throw error;
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Langfuse ingestion failed: ${response.status} ${errorText}`);
     }
   }
 
   private addEvent(event: LangfuseEvent): void {
-    console.error(`[LANGFUSE CRITICAL] *** ADDING EVENT TO BUFFER ***`);
-    console.error(`[LANGFUSE CRITICAL] - Event type: ${event.type}`);
-    console.error(`[LANGFUSE CRITICAL] - Event ID: ${event.id}`);
-    console.error(`[LANGFUSE CRITICAL] - Current buffer size: ${this.eventBuffer.length}`);
-    console.error(`[LANGFUSE CRITICAL] - Event body preview: ${JSON.stringify(event.body).substring(0, 200)}...`);
-    
     logger.debug('Adding event to buffer', { 
       eventType: event.type, 
       eventId: event.id,
@@ -284,17 +252,12 @@ export class LangfuseProvider extends TracingProvider {
     });
     
     this.eventBuffer.push(event);
-    console.error(`[LANGFUSE CRITICAL] - New buffer size: ${this.eventBuffer.length}`);
 
     if (this.eventBuffer.length >= this.batchSize) {
-      console.error(`[LANGFUSE CRITICAL] *** BUFFER FULL - TRIGGERING AUTO-FLUSH ***`);
       logger.debug('Buffer full, triggering auto-flush');
       this.flush().catch(error => {
-        console.error(`[LANGFUSE CRITICAL] ❌ AUTO-FLUSH FAILED:`, error);
         logger.error('Auto-flush failed', error);
       });
-    } else {
-      console.error(`[LANGFUSE CRITICAL] - Buffer not full yet (${this.eventBuffer.length}/${this.batchSize}), waiting...`);
     }
   }
 

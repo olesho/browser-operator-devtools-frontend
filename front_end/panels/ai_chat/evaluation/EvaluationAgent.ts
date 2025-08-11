@@ -622,15 +622,8 @@ export class EvaluationAgent {
       }, timeout);
 
       // Execute tool with tracing context if available
-      console.error(`[EVALUATION AGENT CRITICAL] Executing tool: ${toolName || 'unknown'}`);
-      console.error(`[EVALUATION AGENT CRITICAL] Has tracing context: ${!!tracingContext}`);
-      console.error(`[EVALUATION AGENT CRITICAL] Trace ID: ${tracingContext?.traceId}`);
-      
       const executePromise = tracingContext 
-        ? withTracingContext(tracingContext, () => {
-            console.error(`[EVALUATION AGENT CRITICAL] Inside withTracingContext for ${toolName}`);
-            return tool.execute(input);
-          })
+        ? withTracingContext(tracingContext, () => tool.execute(input))
         : tool.execute(input);
       
       executePromise

@@ -163,17 +163,8 @@ export class ToolRegistry {
    * Get a tool instance by name
    */
   static getToolInstance(name: string): Tool<any, any> | null {
-    console.error(`[TOOLREGISTRY CRITICAL] getToolInstance called for: ${name}`);
     const factory = this.toolFactories.get(name);
-    const tool = factory ? factory() : null;
-    console.error(`[TOOLREGISTRY CRITICAL] Tool found: ${!!tool}, Tool type: ${tool?.constructor?.name}`);
-    if (name === 'web_task_agent') {
-      console.error(`[TOOLREGISTRY CRITICAL] *** WEB_TASK_AGENT REQUESTED ***`);
-      console.error(`[TOOLREGISTRY CRITICAL] Factory exists: ${!!factory}`);
-      console.error(`[TOOLREGISTRY CRITICAL] Tool returned: ${tool}`);
-      console.error(`[TOOLREGISTRY CRITICAL] Tool name: ${tool?.name}`);
-    }
-    return tool;
+    return factory ? factory() : null;
   }
 
   /**
@@ -347,13 +338,6 @@ export class ConfigurableAgentTool implements Tool<ConfigurableAgentArgs, Config
    * Execute the agent
    */
   async execute(args: ConfigurableAgentArgs): Promise<ConfigurableAgentResult> {
-    // CRITICAL DEBUG: Log every ConfigurableAgentTool execution
-    console.error(`[CONFIGURABLEAGENTTOOL CRITICAL] execute() called for: ${this.name}`);
-    if (this.name === 'web_task_agent' || this.name === 'direct_url_navigator_agent') {
-      console.error(`[CONFIGURABLEAGENTTOOL CRITICAL] *** SPECIALIZED AGENT EXECUTION DETECTED: ${this.name} ***`);
-      console.error(`[CONFIGURABLEAGENTTOOL CRITICAL] Args:`, args);
-    }
-    
     logger.info('Executing ${this.name} via AgentRunner with args:', args);
 
     const agentService = AgentService.getInstance();
@@ -396,69 +380,18 @@ export class ConfigurableAgentTool implements Tool<ConfigurableAgentArgs, Config
         : (err, steps, reason) => this.createErrorResult(err, steps, reason),
     };
 
-    // CRITICAL FIX: Get tracing context more reliably
-    // First try to get from the current context
+    // Get tracing context
     let tracingContext = getCurrentTracingContext();
     
-    // DEBUG: Enhanced debugging for tracing context
-    console.error(`[CONFIGURABLEAGENTTOOL TRACING] Agent ${this.name} tracing context check:`);
-    console.error(`[CONFIGURABLEAGENTTOOL TRACING] - Has context from getCurrentTracingContext: ${!!tracingContext}`);
-    console.error(`[CONFIGURABLEAGENTTOOL TRACING] - Trace ID: ${tracingContext?.traceId || 'NONE'}`);
-    console.error(`[CONFIGURABLEAGENTTOOL TRACING] - System prompt preview: ${systemPrompt.substring(0, 150)}...`);
-    
-    if (this.name === 'web_task_agent' || this.name === 'direct_url_navigator_agent') {
-      console.error(`[CONFIGURABLEAGENTTOOL CRITICAL TRACING] *** SPECIALIZED AGENT ${this.name} TRACING STATUS ***`);
-      console.error(`[CONFIGURABLEAGENTTOOL CRITICAL TRACING] - MaxIterations: ${maxIterations}`);
-      console.error(`[CONFIGURABLEAGENTTOOL CRITICAL TRACING] - Model: ${modelName}`);
-      console.error(`[CONFIGURABLEAGENTTOOL CRITICAL TRACING] - Tools count: ${tools.length}`);
-      console.error(`[CONFIGURABLEAGENTTOOL CRITICAL TRACING] - Initial messages count: ${internalMessages.length}`);
-      
-      if (!tracingContext?.traceId) {
-        console.error(`[CONFIGURABLEAGENTTOOL CRITICAL TRACING] ❌ NO TRACE CONTEXT - LLM CALLS WILL NOT BE TRACED!`);
-        
-        // EMERGENCY FIX: Create a temporary tracing context for debugging
-        console.error(`[CONFIGURABLEAGENTTOOL CRITICAL TRACING] 🚨 CREATING EMERGENCY TRACE CONTEXT`);
-        tracingContext = {
-          traceId: `emergency-${this.name}-${Date.now()}`,
-          sessionId: `emergency-session-${Date.now()}`,
-          parentObservationId: undefined
-        };
-      } else {
-        console.error(`[CONFIGURABLEAGENTTOOL CRITICAL TRACING] ✅ TRACE CONTEXT FOUND - LLM CALLS SHOULD BE TRACED`);
-      }
+    // If no tracing context found, create emergency context for specialized agents
+    if (!tracingContext?.traceId && (this.name === 'web_task_agent' || this.name === 'direct_url_navigator_agent')) {
+      tracingContext = {
+        traceId: `emergency-${this.name}-${Date.now()}`,
+        sessionId: `emergency-session-${Date.now()}`,
+        parentObservationId: undefined
+      };
     }
     
-    // CRITICAL DEBUG: Force trace before AgentRunner.run() call
-    if (this.name === 'web_task_agent' || this.name === 'direct_url_navigator_agent') {
-      console.error(`[CONFIGURABLEAGENTTOOL CRITICAL] *** ABOUT TO CALL AgentRunner.run() for ${this.name} ***`);
-      
-      const tracingProvider = createTracingProvider();
-      try {
-        await tracingProvider.createObservation({
-          id: `pre-agentrunner-${Date.now()}`,
-          name: `PRE-AGENTRUNNER TRACE: ${this.name}`,
-          type: 'event',
-          startTime: new Date(),
-          input: {
-            agentName: this.name,
-            confirmed: 'About to call AgentRunner.run()',
-            maxIterations,
-            modelName,
-            messagesCount: internalMessages.length,
-            hasTracingContext: !!tracingContext
-          },
-          metadata: {
-            preAgentRunner: true,
-            agentName: this.name,
-            source: 'ConfigurableAgentTool-Pre-AgentRunner'
-          }
-        }, `pre-agentrunner-${this.name}-${Date.now()}`);
-        console.error(`[CONFIGURABLEAGENTTOOL CRITICAL] ✅ PRE-AGENTRUNNER TRACE CREATED for ${this.name}`);
-      } catch (error) {
-        console.error(`[CONFIGURABLEAGENTTOOL CRITICAL] ❌ PRE-AGENTRUNNER TRACE FAILED:`, error);
-      }
-    }
-
     const result = await AgentRunner.run(
       internalMessages,
       args,
@@ -467,35 +400,6 @@ export class ConfigurableAgentTool implements Tool<ConfigurableAgentArgs, Config
       this, // Pass the current agent instance as executingAgent
       tracingContext // Pass tracing context explicitly
     );
-    
-    // CRITICAL DEBUG: Force trace after AgentRunner.run() call
-    if (this.name === 'web_task_agent' || this.name === 'direct_url_navigator_agent') {
-      console.error(`[CONFIGURABLEAGENTTOOL CRITICAL] *** AgentRunner.run() COMPLETED for ${this.name} ***`);
-      
-      const tracingProvider = createTracingProvider();
-      try {
-        await tracingProvider.createObservation({
-          id: `post-agentrunner-${Date.now()}`,
-          name: `POST-AGENTRUNNER TRACE: ${this.name}`,
-          type: 'event',
-          startTime: new Date(),
-          input: {
-            agentName: this.name,
-            confirmed: 'AgentRunner.run() completed',
-            resultType: typeof result,
-            resultPreview: JSON.stringify(result).substring(0, 200)
-          },
-          metadata: {
-            postAgentRunner: true,
-            agentName: this.name,
-            source: 'ConfigurableAgentTool-Post-AgentRunner'
-          }
-        }, `post-agentrunner-${this.name}-${Date.now()}`);
-        console.error(`[CONFIGURABLEAGENTTOOL CRITICAL] ✅ POST-AGENTRUNNER TRACE CREATED for ${this.name}`);
-      } catch (error) {
-        console.error(`[CONFIGURABLEAGENTTOOL CRITICAL] ❌ POST-AGENTRUNNER TRACE FAILED:`, error);
-      }
-    }
 
     // Return the direct result from the runner
     return result;
