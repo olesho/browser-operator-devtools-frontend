@@ -7,6 +7,7 @@ import type { Tool } from '../tools/Tools.js';
 import { AIChatPanel } from '../ui/AIChatPanel.js';
 import { ChatMessageEntity, type ChatMessage } from '../ui/ChatView.js';
 import { createLogger } from '../core/Logger.js';
+import type { AgentSession } from './AgentSessionTypes.js';
 import { getCurrentTracingContext, createTracingProvider } from '../tracing/TracingConfig.js';
 
 const logger = createLogger('ConfigurableAgentTool');
@@ -45,6 +46,31 @@ export interface HandoffConfig {
   includeToolResults?: string[];
 
   // TODO: Add toolNameOverride, toolDescriptionOverride, transitionalMessage later
+}
+
+/**
+ * UI display configuration for an agent
+ */
+export interface AgentUIConfig {
+  /**
+   * Display name for the agent (human-readable)
+   */
+  displayName?: string;
+
+  /**
+   * Avatar/icon for the agent (emoji or icon class)
+   */
+  avatar?: string;
+
+  /**
+   * Primary color for the agent (hex code)
+   */
+  color?: string;
+
+  /**
+   * Background color for the agent (hex code)
+   */
+  backgroundColor?: string;
 }
 
 /**
@@ -101,6 +127,11 @@ export interface AgentToolConfig {
     properties: Record<string, unknown>,
     required?: string[],
   };
+
+  /**
+   * UI display configuration for the agent
+   */
+  ui?: AgentUIConfig;
 
   /**
    * Custom initialization function name
@@ -229,6 +260,26 @@ export interface ConfigurableAgentResult {
    * Termination reason for the agent run
    */
   terminationReason: AgentRunTerminationReason;
+
+  /**
+   * Structured summary of agent execution
+   */
+  summary?: {
+    /**
+     * Type of completion
+     */
+    type: 'completion' | 'error' | 'timeout';
+    
+    /**
+     * Formatted summary text
+     */
+    content: string;
+  };
+
+  /**
+   * Agent session information
+   */
+  agentSession?: AgentSession;
 }
 
 /**
@@ -338,13 +389,29 @@ export class ConfigurableAgentTool implements Tool<ConfigurableAgentArgs, Config
    * Execute the agent
    */
   async execute(args: ConfigurableAgentArgs): Promise<ConfigurableAgentResult> {
-    logger.info('Executing ${this.name} via AgentRunner with args:', args);
+    logger.info(`Executing ${this.name} via AgentRunner with args:`, args);
 
+    // Get current tracing context for debugging
     const agentService = AgentService.getInstance();
     const apiKey = agentService.getApiKey();
 
     if (!apiKey) {
-      return this.createErrorResult(`API key not configured for ${this.name}`, [], 'error');
+      const errorResult = this.createErrorResult(`API key not configured for ${this.name}`, [], 'error');
+      // Create minimal error session
+      const errorSession: AgentSession = {
+        agentName: this.name,
+        agentQuery: args.query,
+        agentReasoning: args.reasoning,
+        sessionId: crypto.randomUUID(),
+        status: 'error',
+        startTime: new Date(),
+        endTime: new Date(),
+        messages: [],
+        nestedSessions: [],
+        tools: [],
+        terminationReason: 'error'
+      };
+      return { ...errorResult, agentSession: errorSession };
     }
 
     // Initialize
@@ -401,7 +468,7 @@ export class ConfigurableAgentTool implements Tool<ConfigurableAgentArgs, Config
       tracingContext // Pass tracing context explicitly
     );
 
-    // Return the direct result from the runner
+    // Return the direct result from the runner (including agentSession)
     return result;
   }
 }

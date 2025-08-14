@@ -101,9 +101,13 @@ export interface ModelOption {
 // Add model options constant - these are the default OpenAI models
 const DEFAULT_OPENAI_MODELS: ModelOption[] = [
   {value: 'o4-mini-2025-04-16', label: 'O4 Mini', type: 'openai'},
+  {value: 'o3-mini-2025-01-31', label: 'O3 Mini', type: 'openai'},
+  {value: 'gpt-5-2025-08-07', label: 'GPT-5', type: 'openai'},
+  {value: 'gpt-5-mini-2025-08-07', label: 'GPT-5 Mini', type: 'openai'},
+  {value: 'gpt-5-nano-2025-08-07', label: 'GPT-5 Nano', type: 'openai'},
+  {value: 'gpt-4.1-2025-04-14', label: 'GPT-4.1', type: 'openai'},
   {value: 'gpt-4.1-mini-2025-04-14', label: 'GPT-4.1 Mini', type: 'openai'},
   {value: 'gpt-4.1-nano-2025-04-14', label: 'GPT-4.1 Nano', type: 'openai'},
-  {value: 'gpt-4.1-2025-04-14', label: 'GPT-4.1', type: 'openai'},
 ];
 
 // Default model selections for each provider
@@ -331,23 +335,21 @@ export class AIChatPanel extends UI.Panel.Panel {
 
   static getNanoModelWithProvider(): { model: string, provider: 'openai' | 'litellm' | 'groq' | 'openrouter' } {
     const modelName = AIChatPanel.getNanoModel();
-    const allModelOptions = AIChatPanel.getModelOptions();
-    const modelOption = allModelOptions.find(option => option.value === modelName);
+    const provider = AIChatPanel.getProviderForModel(modelName);
     
     return {
       model: modelName,
-      provider: (modelOption?.type as 'openai' | 'litellm' | 'groq' | 'openrouter') || 'openai'
+      provider: provider
     };
   }
 
   static getMiniModelWithProvider(): { model: string, provider: 'openai' | 'litellm' | 'groq' | 'openrouter' } {
     const modelName = AIChatPanel.getMiniModel();
-    const allModelOptions = AIChatPanel.getModelOptions();
-    const modelOption = allModelOptions.find(option => option.value === modelName);
+    const provider = AIChatPanel.getProviderForModel(modelName);
     
     return {
       model: modelName,
-      provider: (modelOption?.type as 'openai' | 'litellm' | 'groq' | 'openrouter') || 'openai'
+      provider: provider
     };
   }
 
@@ -366,6 +368,78 @@ export class AIChatPanel extends UI.Panel.Panel {
     const currentProvider = localStorage.getItem(PROVIDER_SELECTION_KEY) || 'openai';
     logger.debug(`Provider ${originalProvider} not available for model ${modelName}, falling back to current provider: ${currentProvider}`);
     return currentProvider as 'openai' | 'litellm' | 'groq' | 'openrouter';
+  }
+
+  /**
+   * Gets the currently selected provider from localStorage
+   * @returns The currently selected provider
+   */
+  static getCurrentProvider(): 'openai' | 'litellm' | 'groq' | 'openrouter' {
+    return (localStorage.getItem(PROVIDER_SELECTION_KEY) || 'openai') as 'openai' | 'litellm' | 'groq' | 'openrouter';
+  }
+
+  /**
+   * Checks if a model supports vision/multimodal capabilities
+   * @param modelName The model name to check
+   * @returns True if the model supports vision, false otherwise
+   */
+  static async isVisionCapable(modelName: string): Promise<boolean> {
+    logger.debug(`[Vision Check] Checking vision capability for model: ${modelName}`);
+    
+    // First, try to get the provider for this model and use its vision detection API
+    try {
+      const provider = AIChatPanel.getProviderForModel(modelName);
+      logger.debug(`[Vision Check] Model ${modelName} uses provider: ${provider}`);
+      
+      if (provider === 'openrouter') {
+        // Use OpenRouter's API-based vision detection
+        const { LLMProviderRegistry } = await import('../LLM/LLMProviderRegistry.js');
+        const providerInstance = LLMProviderRegistry.getProvider('openrouter') as any;
+        
+        if (providerInstance && typeof providerInstance.supportsVision === 'function') {
+          const isVision = await providerInstance.supportsVision(modelName);
+          logger.info(`[Vision Check] OpenRouter API result for ${modelName}: ${isVision}`);
+          return isVision;
+        }
+      }
+      
+      // For other providers, try the registry approach
+      const llmClient = LLMClient.getInstance();
+      const allModels = await llmClient.getAvailableModels();
+      logger.debug(`[Vision Check] Got ${allModels.length} models from registry`);
+      
+      const modelInfo = allModels.find(model => model.id === modelName);
+      
+      if (modelInfo && modelInfo.capabilities) {
+        const isVision = modelInfo.capabilities.vision;
+        logger.info(`[Vision Check] Model ${modelName} vision capability from registry: ${isVision}`);
+        return isVision;
+      }
+      
+    } catch (error) {
+      logger.warn(`[Vision Check] Provider-specific vision check failed for ${modelName}:`, error);
+    }
+    
+    // Fallback: Check if model name contains known vision model patterns
+    const modelNameWithoutPrefix = modelName.toLowerCase().replace(/^[^/]+\//, '');
+    logger.debug(`[Vision Check] Falling back to pattern matching - Original: ${modelName}, Without prefix: ${modelNameWithoutPrefix}`);
+    
+    const visionModelPatterns = [
+      'gpt-4', 'gpt-4o', 'gpt-4o-mini', 'gpt-4-vision',
+      'claude-3', 'claude-3-haiku', 'claude-3-sonnet', 'claude-3-opus', 'claude-3.5-sonnet', 'claude-4',
+      'gemini', 'gemini-pro', 'gemini-2.5', 'gemini-pro-vision',
+      'llava', 'vision', 'multimodal'
+    ];
+    
+    const matchedPattern = visionModelPatterns.find(pattern => 
+      modelNameWithoutPrefix.includes(pattern.toLowerCase()) ||
+      modelName.toLowerCase().includes(pattern.toLowerCase())
+    );
+    
+    const isVisionFromPattern = !!matchedPattern;
+    logger.info(`[Vision Check] Pattern matching result for ${modelName}: ${isVisionFromPattern}${matchedPattern ? ` (matched: ${matchedPattern})` : ''}`);
+    
+    return isVisionFromPattern;
   }
 
   
@@ -447,7 +521,8 @@ export class AIChatPanel extends UI.Panel.Panel {
     const existingOpenRouterModels = existingAllModels.filter((m: ModelOption) => m.type === 'openrouter');
     
     // Update models based on what type of models we're adding
-    let updatedOpenAIModels = existingOpenAIModels.length > 0 ? existingOpenAIModels : DEFAULT_OPENAI_MODELS;
+    // Always use DEFAULT_OPENAI_MODELS for OpenAI to ensure we have the latest hardcoded list
+    let updatedOpenAIModels = DEFAULT_OPENAI_MODELS;
     let updatedLiteLLMModels = existingLiteLLMModels;
     let updatedGroqModels = existingGroqModels;
     let updatedOpenRouterModels = existingOpenRouterModels;
@@ -582,6 +657,15 @@ export class AIChatPanel extends UI.Panel.Panel {
     return updatedOptions;
   }
   
+  /**
+   * Clears cached model data to force refresh from defaults
+   */
+  static clearModelCache(): void {
+    localStorage.removeItem('ai_chat_all_model_options');
+    localStorage.removeItem('ai_chat_model_options');
+    logger.info('Cleared model cache - will use DEFAULT_OPENAI_MODELS on next refresh');
+  }
+
   /**
    * Removes a custom model from the options
    * @param modelName Name of the model to remove
