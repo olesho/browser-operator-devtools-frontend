@@ -6,7 +6,6 @@ import { AgentService } from '../core/AgentService.js';
 import { createLogger } from '../core/Logger.js';
 import { LLMClient } from '../LLM/LLMClient.js';
 import { AIChatPanel } from '../ui/AIChatPanel.js';
-import { tracedLLMCall } from '../tracing/TracingConfig.js';
 
 import type { Tool } from './Tools.js';
 
@@ -170,30 +169,15 @@ Return a JSON array of requirement statements. Example format:
       const { model, provider } = AIChatPanel.getNanoModelWithProvider();
       const llm = LLMClient.getInstance();
       
-      const response = await tracedLLMCall(
-        () => llm.call({
-          provider,
-          model,
-          messages: [
-            { role: 'user', content: userPrompt }
-          ],
-          systemPrompt,
-          temperature: 0.1,
-        }),
-        {
-          toolName: this.name,
-          model,
-          provider,
-          temperature: 0.1,
-          input: {
-            systemPrompt: systemPrompt.substring(0, 500) + '...',
-            userPrompt: userPrompt.substring(0, 500) + '...'
-          },
-          metadata: {
-            phase: 'extract_requirements'
-          }
-        }
-      );
+      const response = await llm.call({
+        provider,
+        model,
+        messages: [
+          { role: 'user', content: userPrompt }
+        ],
+        systemPrompt,
+        temperature: 0.1,
+      });
 
       if (!response.text) {
         return { success: false, requirements: [], error: 'No response received' };
@@ -278,30 +262,15 @@ ${JSON.stringify(evaluationSchema, null, 2)}`;
       const { model, provider } = AIChatPanel.getNanoModelWithProvider();
       const llm = LLMClient.getInstance();
       
-      const response = await tracedLLMCall(
-        () => llm.call({
-          provider,
-          model,
-          messages: [
-            { role: 'user', content: userPrompt }
-          ],
-          systemPrompt,
-          temperature: 0.1,
-        }),
-        {
-          toolName: this.name,
-          model,
-          provider,
-          temperature: 0.1,
-          input: {
-            systemPrompt: systemPrompt.substring(0, 200) + '...',
-            userPrompt: userPrompt.substring(0, 200) + '...'
-          },
-          metadata: {
-            phase: 'evaluate_response'
-          }
-        }
-      );
+      const response = await llm.call({
+        provider,
+        model,
+        messages: [
+          { role: 'user', content: userPrompt }
+        ],
+        systemPrompt,
+        temperature: 0.1,
+      });
 
       if (!response.text) {
         return { success: false, error: 'No response received' };
@@ -353,30 +322,15 @@ Be concise, specific, and constructive.`;
       const { model, provider } = AIChatPanel.getNanoModelWithProvider();
       const llm = LLMClient.getInstance();
       
-      const response = await tracedLLMCall(
-        () => llm.call({
-          provider,
-          model,
-          messages: [
-            { role: 'user', content: userPrompt }
-          ],
-          systemPrompt,
-          temperature: 0.7,
-        }),
-        {
-          toolName: this.name,
-          model,
-          provider,
-          temperature: 0.7,
-          input: {
-            systemPrompt: systemPrompt.substring(0, 200) + '...',
-            userPrompt: userPrompt.substring(0, 200) + '...'
-          },
-          metadata: {
-            phase: 'generate_feedback'
-          }
-        }
-      );
+      const response = await llm.call({
+        provider,
+        model,
+        messages: [
+          { role: 'user', content: userPrompt }
+        ],
+        systemPrompt,
+        temperature: 0.7,
+      });
 
       return response.text || 'The plan does not meet all requirements, but no specific feedback could be generated.';
     } catch (error: any) {
