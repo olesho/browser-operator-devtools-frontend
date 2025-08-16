@@ -17,6 +17,18 @@ export interface ToolExecutionResult {
   metadata?: Record<string, unknown>;
 }
 
+/**
+ * Tool execution error result for failed attempts
+ * Provides structured error information including partial results
+ */
+export interface ToolExecutionErrorResult {
+  error: string;
+  partial: boolean;
+  lastError?: string;
+  attempts?: number;
+  metadata?: Record<string, unknown>;
+}
+
 
 /**
  * Screenshot data with metadata
@@ -85,5 +97,17 @@ export class TypeGuards {
            'timestamp' in value &&
            typeof (value as Record<string, unknown>).dataUrl === 'string' &&
            typeof (value as Record<string, unknown>).timestamp === 'number';
+  }
+
+  /**
+   * Check if value is a ToolExecutionErrorResult
+   */
+  static isToolExecutionErrorResult(value: unknown): value is ToolExecutionErrorResult {
+    return typeof value === 'object' &&
+           value !== null &&
+           'error' in value &&
+           'partial' in value &&
+           typeof (value as Record<string, unknown>).error === 'string' &&
+           typeof (value as Record<string, unknown>).partial === 'boolean';
   }
 }

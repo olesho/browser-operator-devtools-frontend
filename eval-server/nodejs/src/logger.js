@@ -100,4 +100,53 @@ export function logConnection(connectionData) {
   });
 }
 
+// Track shutdown state to prevent multiple calls
+let isShuttingDown = false;
+
+/**
+ * Gracefully shutdown loggers to prevent resource leaks
+ * Closes all transports and flushes pending writes
+ */
+export function shutdownLoggers() {
+  if (isShuttingDown) {
+    return Promise.resolve();
+  }
+  
+  isShuttingDown = true;
+  
+  return Promise.all([
+    new Promise((resolve) => {
+      // Check if logger is already destroyed
+      if (logger.destroyed || logger._writableState?.ended) {
+        resolve();
+        return;
+      }
+      
+      logger.end(() => {
+        console.log('Main logger shutdown complete');
+        resolve();
+      });
+    }),
+    new Promise((resolve) => {
+      // Check if evaluationLogger is already destroyed
+      if (evaluationLogger.destroyed || evaluationLogger._writableState?.ended) {
+        resolve();
+        return;
+      }
+      
+      evaluationLogger.end(() => {
+        console.log('Evaluation logger shutdown complete');
+        resolve();
+      });
+    })
+  ]);
+}
+
+/**
+ * Get the current shutdown state
+ */
+export function isLoggersShuttingDown() {
+  return isShuttingDown;
+}
+
 export default logger;

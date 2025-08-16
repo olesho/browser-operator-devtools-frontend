@@ -31,6 +31,8 @@ import {
   createSuccessResponse,
   createErrorResponse
 } from './EvaluationProtocol.js';
+import type { ToolExecutionErrorResult } from './utils/EvaluationTypes.js';
+import { TypeGuards } from './utils/EvaluationTypes.js';
 
 const logger = createLogger('EvaluationAgent');
 
@@ -446,8 +448,8 @@ export class EvaluationAgent {
           });
           
           if (toolExecutionAttempts < maxAttempts) {
-            // Wait before retry, with exponential backoff
-            const retryDelay = 1000 * Math.pow(2, toolExecutionAttempts - 1);
+            // Wait before retry, with exponential backoff (capped at 30 seconds)
+            const retryDelay = Math.min(30000, 1000 * Math.pow(2, toolExecutionAttempts - 1));
             this.sendStatus(params.evaluationId, 'running', 0.5 + (toolExecutionAttempts * 0.1), 
               `Tool execution failed (attempt ${toolExecutionAttempts}), retrying in ${retryDelay/1000}s...`);
             
@@ -458,12 +460,13 @@ export class EvaluationAgent {
               `Tool execution failed after ${maxAttempts} attempts, checking for partial results...`);
             
             // Instead of throwing, set a default result and continue
-            toolResult = {
+            const errorResult: ToolExecutionErrorResult = {
               error: `Tool execution failed after ${maxAttempts} attempts: ${errorMessage}`,
               partial: true,
               lastError: errorMessage,
               attempts: maxAttempts
             };
+            toolResult = errorResult;
             
             logger.warn(`All tool execution attempts failed, using error result`, {
               evaluationId: params.evaluationId,
@@ -477,8 +480,8 @@ export class EvaluationAgent {
       const executionTime = Date.now() - startTime;
 
       // Determine if this was a complete success or partial result
-      const isPartialResult = toolResult && typeof toolResult === 'object' && toolResult.partial;
-      const hasError = toolResult && typeof toolResult === 'object' && toolResult.error;
+      const isPartialResult = TypeGuards.isToolExecutionErrorResult(toolResult) && toolResult.partial;
+      const hasError = TypeGuards.isToolExecutionErrorResult(toolResult) && toolResult.error;
       
       // Send JSON-RPC response (success even for partial results to avoid immediate failure)
       const rpcResponse = createSuccessResponse(
@@ -490,7 +493,7 @@ export class EvaluationAgent {
           timestamp: new Date().toISOString(),
           duration: executionTime,
           status: isPartialResult ? 'partial' : 'success',
-          ...(hasError && { error: toolResult.error })
+          ...(hasError && TypeGuards.isToolExecutionErrorResult(toolResult) && { error: toolResult.error })
         }],
         {
           url: params.url,
@@ -504,7 +507,7 @@ export class EvaluationAgent {
       }
 
       const statusMessage = isPartialResult 
-        ? `Evaluation completed with errors after retries: ${toolResult.error}` 
+        ? `Evaluation completed with errors after retries: ${TypeGuards.isToolExecutionErrorResult(toolResult) ? toolResult.error : 'Unknown error'}` 
         : 'Evaluation completed successfully';
       
       this.sendStatus(params.evaluationId, 'completed', 1.0, statusMessage);
@@ -519,8 +522,8 @@ export class EvaluationAgent {
             evaluationId: params.evaluationId,
             ...(isPartialResult && { 
               partial: true, 
-              errorMessage: toolResult.error,
-              attempts: toolResult.attempts 
+              errorMessage: TypeGuards.isToolExecutionErrorResult(toolResult) ? toolResult.error : undefined,
+              attempts: TypeGuards.isToolExecutionErrorResult(toolResult) ? toolResult.attempts : undefined 
             })
           }
         });
@@ -533,7 +536,7 @@ export class EvaluationAgent {
         executionTime,
         success: !isPartialResult,
         partial: isPartialResult,
-        ...(hasError && { error: toolResult.error })
+        ...(hasError && TypeGuards.isToolExecutionErrorResult(toolResult) && { error: toolResult.error })
       });
 
     } catch (error) {

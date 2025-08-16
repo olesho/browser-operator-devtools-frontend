@@ -8,6 +8,7 @@
 
 import { EvalServer } from '../src/lib/EvalServer.js';
 import { HTTPWrapper } from '../src/lib/HTTPWrapper.js';
+import { shutdownLoggers } from '../src/logger.js';
 
 console.log('🔧 Creating EvalServer...');
 const evalServer = new EvalServer({
@@ -43,3 +44,29 @@ setInterval(() => {
   console.log(`📊 EvalServer: ${evalServerStatus.connectedClients} clients, ${evalServerStatus.readyClients} ready`);
   console.log(`📊 HTTP API: ${httpWrapperStatus.isRunning ? 'running' : 'stopped'} on ${httpWrapperStatus.url}`);
 }, 15000);
+
+// Graceful shutdown handling
+async function gracefulShutdown(signal) {
+  console.log(`\\n🔄 Received ${signal}, shutting down gracefully...`);
+  
+  try {
+    console.log('🛑 Stopping HTTP wrapper...');
+    await httpWrapper.stop();
+    
+    console.log('🛑 Stopping EvalServer...');
+    await evalServer.stop();
+    
+    console.log('🛑 Shutting down loggers...');
+    await shutdownLoggers();
+    
+    console.log('✅ Graceful shutdown complete');
+    process.exit(0);
+  } catch (error) {
+    console.error('❌ Error during shutdown:', error);
+    process.exit(1);
+  }
+}
+
+// Setup signal handlers
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));

@@ -7,6 +7,7 @@
 // Simple example demonstrating the programmatic API usage
 
 import { EvalServer } from '../src/lib/EvalServer.js';
+import { shutdownLoggers } from '../src/logger.js';
 
 console.log('🔧 Creating server...');
 const server = new EvalServer({
@@ -66,3 +67,26 @@ setInterval(() => {
   const status = server.getStatus();
   console.log(`📊 Status: ${status.connectedClients} clients, ${status.readyClients} ready`);
 }, 10000);
+
+// Graceful shutdown handling
+async function gracefulShutdown(signal) {
+  console.log(`\n🔄 Received ${signal}, shutting down gracefully...`);
+  
+  try {
+    console.log('🛑 Stopping EvalServer...');
+    await server.stop();
+    
+    console.log('🛑 Shutting down loggers...');
+    await shutdownLoggers();
+    
+    console.log('✅ Graceful shutdown complete');
+    process.exit(0);
+  } catch (error) {
+    console.error('❌ Error during shutdown:', error);
+    process.exit(1);
+  }
+}
+
+// Setup signal handlers
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
