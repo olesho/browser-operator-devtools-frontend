@@ -194,7 +194,7 @@ export class AgentRunner {
     defaultCreateErrorResult: AgentRunnerHooks['createErrorResult'],
     llmToolArgs?: ConfigurableAgentArgs, // Specific args if triggered by LLM tool call
     parentSession?: AgentSession // For natural nesting
-  ): Promise<ConfigurableAgentResult> {
+  ): Promise<ConfigurableAgentResult & { agentSession: AgentSession }> {
     const targetAgentName = handoffConfig.targetAgentName;
     const targetAgentTool = ToolRegistry.getRegisteredTool(targetAgentName);
 
@@ -287,10 +287,18 @@ export class AgentRunner {
         targetRunnerConfig, // Pass the constructed config
         targetRunnerHooks,  // Pass the constructed hooks
         targetAgentTool, // Target agent is now the executing agent
-        undefined // No tracing context for handoff (would need to be passed through)
+        parentSession // Pass parent session for natural nesting
     );
 
-    logger.info('Handoff target agent ${targetAgentTool.name} finished. Result success: ${handoffResult.success}');
+    // Extract the result and session
+    const { agentSession: childSession, ...actualResult } = handoffResult;
+
+    // Add child session to parent's nested sessions (natural nesting)
+    if (parentSession) {
+      parentSession.nestedSessions.push(childSession);
+    }
+
+    logger.info(`Handoff target agent ${targetAgentTool.name} finished. Result success: ${actualResult.success}`);
 
     // Check if the target agent is configured to *include* intermediate steps
     if (targetAgentTool instanceof ConfigurableAgentTool && targetAgentTool.config.includeIntermediateStepsOnReturn === true) {
@@ -298,21 +306,23 @@ export class AgentRunner {
       logger.info(`Including intermediateSteps from ${targetAgentTool.name} based on its config.`);
       const combinedIntermediateSteps = [
           ...currentMessages, // History *before* the recursive call
-          ...(handoffResult.intermediateSteps || []) // History *from* the recursive call (should exist if flag is true)
+          ...(actualResult.intermediateSteps || []) // History *from* the recursive call (should exist if flag is true)
       ];
       // Return the result from the target agent, but with combined history
       return {
-          ...handoffResult,
+          ...actualResult,
           intermediateSteps: combinedIntermediateSteps,
-          terminationReason: handoffResult.terminationReason || 'handed_off'
+          terminationReason: actualResult.terminationReason || 'handed_off',
+          agentSession: childSession
       };
     }
     // Otherwise (default), omit the target's intermediate steps
     logger.info(`Omitting intermediateSteps from ${targetAgentTool.name} based on its config (default or flag set to false).`);
     // Return result from target, ensuring intermediateSteps are omitted
     const finalResult = {
-      ...handoffResult,
-      terminationReason: handoffResult.terminationReason || 'handed_off'
+      ...actualResult,
+      terminationReason: actualResult.terminationReason || 'handed_off',
+      agentSession: childSession
     };
     // Explicitly delete intermediateSteps if they somehow exist on actualResult (shouldn't due to target config)
     delete finalResult.intermediateSteps;
@@ -326,10 +336,9 @@ export class AgentRunner {
     config: AgentRunnerConfig,
     hooks: AgentRunnerHooks,
     executingAgent: ConfigurableAgentTool | null,
-    tracingContext?: any
-  ): Promise<ConfigurableAgentResult> {
+    parentSession?: AgentSession // For natural nesting
+  ): Promise<ConfigurableAgentResult & { agentSession: AgentSession }> {
     const agentName = executingAgent?.name || 'Unknown';
-    
     logger.info('Starting execution loop for agent: ${agentName}');
     const { apiKey, modelName, systemPrompt, tools, maxIterations, temperature } = config;
     const { prepareInitialMessages, createSuccessResult, createErrorResult } = hooks;
@@ -343,7 +352,7 @@ export class AgentRunner {
       agentDisplayName: executingAgent?.config?.ui?.displayName || agentName,
       agentDescription: executingAgent?.config?.description,
       sessionId: crypto.randomUUID(),
-      parentSessionId: undefined, // No parent session for top-level agent
+      parentSessionId: parentSession?.sessionId,
       status: 'running',
       startTime: new Date(),
       messages: [],
@@ -502,11 +511,6 @@ export class AgentRunner {
           logger.info(`${agentName} Created AgentRunner LLM generation trace: ${generationId}`);
         }
 
-        logger.info('${agentName} Calling LLM with ${messages.length} messages');
-
-        // Try to get tracing context from getCurrentTracingContext if not passed explicitly
-        const effectiveTracingContext = tracingContext || getCurrentTracingContext();
-        
         const llm = LLMClient.getInstance();
         const provider = AIChatPanel.getProviderForModel(modelName);
         const llmMessages = AgentRunner.convertToLLMMessages(messages);
@@ -554,25 +558,6 @@ export class AgentRunner {
             iteration: iteration + 1,
             duration: Date.now() - generationStartTime.getTime()
           });
-        }
-        
-        // Update generation observation with output
-        if (generationId && effectiveTracingContext?.traceId) {
-          const tracingProvider = createTracingProvider();
-          try {
-            await tracingProvider.createObservation({
-              id: generationId,
-              name: `LLM Generation (AgentRunner): ${agentName}`,
-              type: 'generation',
-              endTime: new Date(),
-              output: {
-                response: llmResponse.text || 'No text response',
-                reasoning: llmResponse.reasoning?.summary
-              }
-            }, effectiveTracingContext.traceId);
-          } catch (tracingError) {
-            logger.warn('Failed to update generation observation:', tracingError);
-          }
         }
       } catch (error: any) {
         logger.error(`${agentName} LLM call failed:`, error);
@@ -1057,7 +1042,7 @@ export class AgentRunner {
             const { agentSession: childSession, ...actualResult } = handoffResult;
 
             // Add child session to current session's nested sessions (natural nesting)
-            if (this.currentSession && childSession) {
+            if (this.currentSession) {
               this.currentSession.nestedSessions.push(childSession);
             }
 
