@@ -485,14 +485,19 @@ export class EvalServer extends EventEmitter {
   }
 
   /**
-   * Handle client disconnection
+   * Handle client disconnection and cleanup stale tab references
    */
   handleDisconnection(connection) {
     connection.rpcClient.cleanup();
 
+    // Clean up stale tab references
     if (connection.registered && connection.compositeClientId) {
       this.clientManager.unregisterTab(connection.compositeClientId);
       this.connectedClients.delete(connection.compositeClientId);
+      
+      // Additional cleanup: ensure tab is removed from activeTabs
+      const { baseClientId } = this.clientManager.parseCompositeClientId(connection.compositeClientId);
+      this.clientManager.cleanupStaleTab(baseClientId, connection.tabId);
     } else if (connection.clientId) {
       this.connectedClients.delete(connection.clientId);
     } else {
@@ -520,7 +525,19 @@ export class EvalServer extends EventEmitter {
    */
   sendMessage(ws, data) {
     if (ws.readyState === ws.OPEN) {
-      ws.send(JSON.stringify(data));
+      try {
+        ws.send(JSON.stringify(data));
+      } catch (error) {
+        logger.error('Failed to send WebSocket message', {
+          error: error.message,
+          messageType: data.type
+        });
+      }
+    } else {
+      logger.warn('Cannot send message, WebSocket not open', { 
+        readyState: ws.readyState,
+        messageType: data.type
+      });
     }
   }
 
@@ -642,8 +659,8 @@ export class EvalServer extends EventEmitter {
     const validation = evaluation.validation;
 
     if (validation.type === 'llm-judge' || validation.type === 'hybrid') {
-      const llmConfig = validation.llm_judge;
-      const criteria = llmConfig.criteria || [];
+      const llmConfig = validation.llm_judge || validation.llmJudge;
+      const criteria = llmConfig?.criteria || [];
       const task = `${evaluation.name} - ${evaluation.description || ''}`;
 
       const judgeResult = await this.judge.evaluate(
@@ -651,7 +668,7 @@ export class EvalServer extends EventEmitter {
         JSON.stringify(response.output || response),
         {
           criteria,
-          model: llmConfig.model
+          model: llmConfig?.model
         }
       );
 

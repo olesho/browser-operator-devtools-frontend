@@ -147,6 +147,9 @@ class ClientManager {
    */
   loadAllEvaluations() {
     try {
+      // Clear existing evaluations to prevent duplicates on reload
+      this.evaluations.clear();
+      
       // Find all category directories
       const categories = fs.readdirSync(this.evalsDir)
         .filter(dir => fs.statSync(path.join(this.evalsDir, dir)).isDirectory());
@@ -513,6 +516,61 @@ class ClientManager {
       total += tabs.size;
     }
     return total;
+  }
+
+  /**
+   * Cleanup stale tab references (called on disconnection)
+   */
+  cleanupStaleTab(baseClientId, tabId) {
+    if (!this.activeTabs.has(baseClientId)) {
+      return;
+    }
+
+    const tabs = this.activeTabs.get(baseClientId);
+    const targetTabId = tabId || 'default';
+    
+    // Find and remove stale tab references
+    const staleTabs = Array.from(tabs).filter(tab => 
+      tab.tabId === targetTabId && 
+      (!tab.connection || tab.connection.ws.readyState !== tab.connection.ws.OPEN)
+    );
+    
+    staleTabs.forEach(staleTab => {
+      tabs.delete(staleTab);
+      logger.debug('Cleaned up stale tab reference', {
+        baseClientId,
+        tabId: staleTab.tabId
+      });
+    });
+
+    // Remove client entry if no tabs remain
+    if (tabs.size === 0) {
+      this.activeTabs.delete(baseClientId);
+    }
+  }
+
+  /**
+   * Periodic cleanup of all stale tab connections
+   */
+  cleanupStaleConnections() {
+    for (const [baseClientId, tabs] of this.activeTabs) {
+      const staleTabs = Array.from(tabs).filter(tab => 
+        !tab.connection || tab.connection.ws.readyState !== tab.connection.ws.OPEN
+      );
+      
+      staleTabs.forEach(staleTab => {
+        tabs.delete(staleTab);
+        logger.debug('Cleaned up stale connection', {
+          baseClientId,
+          tabId: staleTab.tabId
+        });
+      });
+
+      // Remove client entry if no tabs remain
+      if (tabs.size === 0) {
+        this.activeTabs.delete(baseClientId);
+      }
+    }
   }
 }
 

@@ -78,7 +78,7 @@ class APIServer {
 
   async handleRequest(req, res) {
     const parsedUrl = url.parse(req.url, true);
-    const path = parsedUrl.pathname;
+    const pathname = parsedUrl.pathname;
     const method = req.method;
 
     try {
@@ -92,39 +92,40 @@ class APIServer {
 
       let result;
 
-      switch (path) {
-        case '/status':
-          result = this.getStatus();
-          break;
+      // Handle dynamic client evaluations route
+      if (pathname.startsWith('/clients/') && pathname.endsWith('/evaluations')) {
+        const clientId = pathname.split('/')[2];
+        result = this.getClientEvaluations(clientId);
+      } else {
+        switch (pathname) {
+          case '/status':
+            result = this.getStatus();
+            break;
 
-        case '/clients':
-          result = this.getClients();
-          break;
+          case '/clients':
+            result = this.getClients();
+            break;
 
-        case '/clients/:id/evaluations':
-          const clientId = parsedUrl.query.id;
-          result = this.getClientEvaluations(clientId);
-          break;
+          case '/evaluate':
+            if (method !== 'POST') {
+              this.sendError(res, 405, 'Method not allowed');
+              return;
+            }
+            result = await this.triggerEvaluation(JSON.parse(body));
+            break;
 
-        case '/evaluate':
-          if (method !== 'POST') {
-            this.sendError(res, 405, 'Method not allowed');
+          case '/v1/responses':
+            if (method !== 'POST') {
+              this.sendError(res, 405, 'Method not allowed');
+              return;
+            }
+            result = await this.handleResponsesRequest(JSON.parse(body));
+            break;
+
+          default:
+            this.sendError(res, 404, 'Not found');
             return;
-          }
-          result = await this.triggerEvaluation(JSON.parse(body));
-          break;
-
-        case '/v1/responses':
-          if (method !== 'POST') {
-            this.sendError(res, 405, 'Method not allowed');
-            return;
-          }
-          result = await this.handleResponsesRequest(JSON.parse(body));
-          break;
-
-        default:
-          this.sendError(res, 404, 'Not found');
-          return;
+        }
       }
 
       this.sendResponse(res, 200, result);
@@ -289,7 +290,7 @@ class APIServer {
       const result = await this.evaluationServer.executeEvaluation(readyClient, evaluation);
       
       // Debug: log the result structure
-      console.log('[DEBUG] executeEvaluation result:', JSON.stringify(result, null, 2));
+      logger.debug('executeEvaluation result:', result);
       
       // Extract the response text from the result
       const responseText = this.extractResponseText(result);
